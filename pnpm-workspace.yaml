@@ -1,0 +1,4 @@
+# The pinned platform binary is supplied by esbuild's optional dependency.
+# Explicitly deny its postinstall; retain strict review for all other scripts.
+allowBuilds:
+  esbuild@0.28.2: false
