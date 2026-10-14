@@ -1,0 +1,43 @@
+{
+  "name": "hamdee-property-foundation",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 4180",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1 --port 4180",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src app tests public/workspace/*.js",
+    "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test:ui": "playwright test",
+    "test:native": "tsx --test --test-concurrency=1 --test-timeout=30000 tests/native/*.test.ts",
+    "test:runtime": "node scripts/verify-runtime.mjs",
+    "assets": "node scripts/prepare-assets.mjs",
+    "test:financial": "node scripts/test-financial.mjs",
+    "test:native:portable": "node --import tsx scripts/run-native.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.117.3",
+    "next": "16.4.0",
+    "pg": "8.23.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.0",
+    "@types/node": "26.6.5",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "eslint": "10.12.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.1"
+  },
+  "packageManager": "pnpm@11.25.0"
+}

@@ -1,0 +1,14 @@
+{
+  "syntheticFixture": true,
+  "projectRef": "dytlzfwbgeuhzgzemqsf",
+  "region": "ap-southeast-1",
+  "ownerIdentifier": null,
+  "residencyDecision": null,
+  "integrationApproval": null,
+  "databaseHost": null,
+  "databasePort": null,
+  "databaseName": null,
+  "databaseUser": null,
+  "sessionTransport": null,
+  "hostedConnectionPerformed": false
+}

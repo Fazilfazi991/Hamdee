@@ -1,0 +1,25 @@
+{
+  "sha256": "80379B2C04D51C30225532E0AE04509899141E9957ED096FE749D7FD9DF8F82F",
+  "tools": [
+    {
+      "sha256": "F5DBFD059F8088B9511A02FC014E659369996FC7D3E88E47658B1CFA2FBB02D2",
+      "signature": "NotSigned",
+      "file": "postgres.exe"
+    },
+    {
+      "sha256": "D385519A50D2CD5E143E86C2C10ACFE0D44D3039D714C8211B804011BCA2409F",
+      "signature": "NotSigned",
+      "file": "initdb.exe"
+    },
+    {
+      "sha256": "9885AC53AF9D67C76C1DDDE87C19E6B15539D7C482BCA70CD5EAD5DAD0B7CE3C",
+      "signature": "NotSigned",
+      "file": "pg_ctl.exe"
+    },
+    {
+      "sha256": "B0FA5901C3E26E858C8D5882A78B71FA4AFC4D38CED45781F13F610717CB03E2",
+      "signature": "NotSigned",
+      "file": "createdb.exe"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+import { handleOwnerAuthRequest } from '../../../../../src/owner-runtime';
+export const runtime='nodejs';
+export const dynamic='force-dynamic';
+export const GET=handleOwnerAuthRequest;
+export const POST=handleOwnerAuthRequest;
+export const PATCH=handleOwnerAuthRequest;
+export const PUT=handleOwnerAuthRequest;
+export const DELETE=handleOwnerAuthRequest;
+export const OPTIONS=handleOwnerAuthRequest;
+export const HEAD=handleOwnerAuthRequest;
