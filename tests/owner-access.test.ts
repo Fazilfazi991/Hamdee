@@ -304,9 +304,11 @@ test('Owner runtime diagnostic: fixed server categories omit secret canaries and
     }
     if(loggerFails)assert.deepEqual(warnings,[]);
     else{
-      assert.equal(warnings.length,1);assert.equal(warnings[0].length,1);
-      const event=JSON.parse(warnings[0][0]);
-      assert.deepEqual(event,{event:'owner_configuration_unavailable',stage});
+      const events=warnings.map(args=>{assert.equal(args.length,1);return JSON.parse(args[0]);});
+      const expected=stage==='database_configuration'
+        ?[{event:'hosted_database_configuration_unavailable',stage:'tls_ca'},{event:'owner_configuration_unavailable',stage}]
+        :[{event:'owner_configuration_unavailable',stage}];
+      assert.deepEqual(events,expected);
       assert.doesNotMatch(JSON.stringify(warnings),/CANARY|password|sb_publishable|postgres:|supabase\\.co/);
     }
     assert.equal(fetches,0);assert.equal(sockets,0);
