@@ -526,7 +526,7 @@ ALTER TABLE hamdee_private.application_identity ADD CONSTRAINT hamdee_developmen
 REVOKE ALL ON SCHEMA hamdee_private FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON ALL TABLES IN SCHEMA hamdee_private FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA hamdee_private FROM PUBLIC,anon,authenticated,service_role;
-ALTER ROLE hamdee_runtime NOLOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION;
+ALTER ROLE hamdee_runtime NOINHERIT;
 -- Provision the secret and LOGIN separately through authorized secure setup.
 -- This review artifact contains no password and enables no database login.
 CREATE ROLE hamdee_backend NOLOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION;
@@ -534,5 +534,15 @@ GRANT CONNECT ON DATABASE postgres TO hamdee_backend;
 GRANT hamdee_runtime TO hamdee_backend WITH ADMIN FALSE;
 GRANT hamdee_runtime TO hamdee_backend WITH INHERIT FALSE;
 GRANT hamdee_runtime TO hamdee_backend WITH SET TRUE;
+-- A non-superuser role creator may set NOINHERIT, but may not redundantly
+-- ALTER SUPERUSER/BYPASSRLS/REPLICATION even to their existing false values.
+-- Creation and 002 already require safe roles; assert the complete final state.
+DO $$ BEGIN
+ IF (SELECT count(*) FROM pg_roles WHERE rolname IN ('hamdee_runtime','hamdee_backend')
+  AND NOT (rolcanlogin OR rolinherit OR rolsuper OR rolbypassrls
+   OR rolcreatedb OR rolcreaterole OR rolreplication))<>2 THEN
+  RAISE EXCEPTION 'unsafe final HAMDEE application role attributes';
+ END IF;
+END $$;
 -- No application member, owner account, property or financial record is seeded.
 COMMIT;
