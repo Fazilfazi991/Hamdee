@@ -26,6 +26,10 @@ export class PropertyApi {
   }
   session(signal){return this.request('/session',{signal});}
   dashboard(signal){return this.request('/dashboard',{signal});}
+  rentalRead(filters,signal){return this.request('/rental?'+new URLSearchParams(filters),{signal});}
+  expenseRead(filters,signal){return this.request('/expenses?'+new URLSearchParams(filters),{signal});}
+  expenseWrite(body,key,signal){return this.request('/expenses',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
+  rentalWrite(body,key,signal){return this.request('/rental',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   list(filters,signal){return this.request('/properties?'+new URLSearchParams(filters),{signal});}
   get(id,signal){return this.request('/properties/'+encodeURIComponent(id),{signal});}
   audit(id,cursor='',signal){return this.request('/properties/'+encodeURIComponent(id)+'/audit?limit=50&cursor='+cursor,{signal});}

@@ -28,7 +28,13 @@ function canonical(value: unknown): string {
   return JSON.stringify(Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b))));
 }
 export class PropertyService {
-  constructor(private db: Database,private readonly owner?:Identity) {}
+  constructor(private db: Database,private readonly owner?:Identity,private readonly databaseEnvironment:'local-test'|'synthetic-development'='local-test') {}
+  async ownerContext<T>(identity:Identity,work:(sql:Sql,actorId:string)=>Promise<T>):Promise<T> {
+    return this.context(identity,'read',async ctx=>{
+      requireThat(ctx.grants.some(g=>g.role==='admin'&&g.portfolio),403,'OWNER_ACCESS_DENIED','Owner access is required.');
+      return work(ctx.sql,ctx.user.id);
+    });
+  }
   async dashboard(identity:Identity):Promise<PropertyDashboard> {
     return this.context(identity,'read',async ctx=>{
       const counts=(await ctx.sql.query<{total:number;active:number;archived:number}>(`SELECT count(*)::int AS total,
@@ -43,7 +49,7 @@ export class PropertyService {
     return this.db.transaction(async sql => {
       await sql.query('SET LOCAL ROLE hamdee_runtime');
       const marker = (await sql.query<{app_id:string;environment:string}>('SELECT app_id,environment FROM hamdee_private.application_identity')).rows[0];
-      requireThat(marker?.app_id==='hamdee' && marker.environment==='local-test',503,'ENVIRONMENT_MISMATCH','The HAMDEE local database is unavailable.');
+      requireThat(marker?.app_id==='hamdee' && marker.environment===this.databaseEnvironment,503,'ENVIRONMENT_MISMATCH','The dedicated HAMDEE database is unavailable.');
       const user = (await sql.query<User>('SELECT id,display_name,enabled FROM hamdee_private.app_users WHERE issuer=$1 AND subject=$2',[identity.issuer,identity.subject])).rows[0];
       requireThat(user?.enabled,401,'UNAUTHENTICATED','Sign in with an authorized account.');
       await sql.query("SELECT set_config('hamdee.actor',$1,true),set_config('hamdee.action',$2,true),set_config('hamdee.new_property','',true)",[user.id,action]);
@@ -105,6 +111,7 @@ export class PropertyService {
       const createGrant=ctx.grants.find(g=>permits(g,'create') && (g.portfolio || g.role==='operations'));
       if(action==='create') requireThat(createGrant,403,'FORBIDDEN','This operation is not permitted.');
       else { old=await this.getRow(ctx,id!); await this.authorize(ctx,id!,action); }
+      if(id){await ctx.sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['property:'+id]);old=await this.getRow(ctx,id);}
       // Database-scoped lock, not a process-local mutex: retry safety across servers.
       await ctx.sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${ctx.user.id}:${action}:${id||'new'}:${key}`]);
       const saved=(await ctx.sql.query<{digest:string;property_id:string;result:CommandResult}>(`SELECT digest,property_id,result FROM hamdee_private.commands

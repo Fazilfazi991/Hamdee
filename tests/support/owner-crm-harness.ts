@@ -205,7 +205,7 @@ export async function startOwnerNativeCluster(runtime: { bin: string; archiveSha
       host: '127.0.0.1', port, database, dataDirectory: data, ownedPid: pid, serverStopped: !started }) };
 }
 
-const assetPaths = new Set(['workspace/index.html', 'workspace/adapter.js', 'workspace/app.js', 'workspace/foundation.css',
+const assetPaths = new Set(['workspace/index.html', 'workspace/adapter.js', 'workspace/app.js', 'workspace/rental.js', 'workspace/expenses.js', 'workspace/foundation.css',
   'shared/styles.css', 'shared/icons.js', 'shared/hamdee-logo.png', 'shared/inter-latin.woff2']);
 export type OwnerQaHttpHandler = (request: Request) => Promise<Response>;
 
@@ -334,6 +334,7 @@ export async function seedOwnerAppRecords(sql: { query: (text: string, values?: 
 }
 
 export async function createOwnerQaFixture(config: { origin?: string; database?: Database; pg?: PGlite;
+  databaseEnvironment?:'local-test'|'synthetic-development';
   provider?: ReturnType<typeof ownerProviderFake>; clock?: ReturnType<typeof ownerQaClock>;
   timings?: Pick<OwnerAuthOptions['policy'], 'idleTimeoutMs' | 'absoluteTimeoutMs' | 'csrfLifetimeMs' | 'mfaMaxAgeMs'> } = {}) {
   const inputs = ownerQaInputs(), clock = config.clock || ownerQaClock(inputs.time), fake = config.provider || ownerProviderFake(clock);
@@ -355,7 +356,7 @@ export async function createOwnerQaFixture(config: { origin?: string; database?:
     audit: { async append(event) { if (!hooks.auditAvailable) throw new Error('SYNTHETIC_AUDIT_FAILURE'); audit.push(structuredClone(event)); } }
   };
   const guardedDb: Database = { transaction(work) { if (!hooks.databaseAvailable) return Promise.reject(new Error('SYNTHETIC_DATABASE_FAILURE')); return database.transaction(work); } };
-  let app: OwnerApplication = createOwnerApplication({ ...options, database: guardedDb, logger: () => {} });
+  let app: OwnerApplication = createOwnerApplication({ ...options, database: guardedDb, databaseEnvironment:config.databaseEnvironment, logger: () => {} });
   const jar = new OwnerCookieJar();
   const request = async (method: string, route: string, body?: unknown, extra: Record<string, string> = {}, cookies = jar) => {
     const request = new Request(options.policy.origin + route, { method,
@@ -379,7 +380,7 @@ export async function createOwnerQaFixture(config: { origin?: string; database?:
     return jar;
   };
   return { inputs, options, fake, clock, jar, audit, hooks, pg, member, database, request, auth, login,
-    app: () => app, rebuildApplication: () => { app = createOwnerApplication({ ...options, database: guardedDb, logger: () => {} }); },
+    app: () => app, rebuildApplication: () => { app = createOwnerApplication({ ...options, database: guardedDb, databaseEnvironment:config.databaseEnvironment, logger: () => {} }); },
     close: async () => { if (!config.database) await pg?.close(); } };
 }
 

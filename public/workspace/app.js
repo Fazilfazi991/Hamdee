@@ -1,4 +1,6 @@
 import { PropertyApi } from './adapter.js';
+import { renderRental,renderRentalDashboard,resetRental,rentalReportPeriod } from './rental.js';
+import { renderExpenses,resetExpenses } from './expenses.js';
 const api=new PropertyApi(),$=s=>document.querySelector(s),icon=window.icon;
 const e=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let session=null,current=null,formContext=null,pending=null,trigger=null,routeSequence=0,authGeneration=0;
@@ -13,7 +15,7 @@ const unavailable=(title,message)=>`<section class="panel foundation-unavailable
 const date=v=>v?new Date(v).toLocaleString('en-GB',{timeZone:'UTC'})+' UTC':'—';
 const nav=[['dashboard','Dashboard','dashboard'],['properties','Properties','properties'],['partners','Investment partners','partners'],['tenants','Tenants & agreements','tenants'],['collections','Collections','collections'],['cheques','Cheque desk','cheques'],['expenses','Expenses','expenses'],['maintenance','Maintenance','maintenance'],['vendors','Vendors','vendors'],['company','Company accounts','company'],['settlements','Partner settlements','settlements'],['reports','Reports','reports'],['settings','Settings','settings']];
 function invalidateForm(){writeController?.abort();writeController=null;formContext=null;pending=null;$('#dialog').close();$('#dialog-body').innerHTML='';$('#conflict-review').innerHTML='';$('#form-error').textContent='';$('#save-button').disabled=false;$('#property-form').removeAttribute('aria-busy');}
-function clearProtected(){authGeneration++;routeSequence++;readController?.abort();authController?.abort();window.clearTimeout(expiryTimer);session=null;current=null;page=null;access=null;enrollment=null;api.csrfToken=null;invalidateForm();$('#user-context').textContent='Not signed in';$('#logout-button').hidden=true;$('#recovery-button').hidden=true;document.querySelectorAll('#recovery-button,.topbar [data-action="refresh"]').forEach(button=>button.disabled=false);$('#feedback').textContent='';$('#mode-detail').textContent='Property metadata only · backend required';}
+function clearProtected(){resetExpenses();resetRental();authGeneration++;routeSequence++;readController?.abort();authController?.abort();window.clearTimeout(expiryTimer);session=null;current=null;page=null;access=null;enrollment=null;api.csrfToken=null;invalidateForm();$('#user-context').textContent='Not signed in';$('#logout-button').hidden=true;$('#recovery-button').hidden=true;document.querySelectorAll('#recovery-button,.topbar [data-action="refresh"]').forEach(button=>button.disabled=false);$('#feedback').textContent='';$('#mode-detail').textContent='Property and rental records · backend required';}
 function beginRead(){readController?.abort();readController=new window.AbortController();routeSequence++;return readController;}
 const validRead=(seq,controller)=>seq===routeSequence&&!controller.signal.aborted;
 const accessLost=error=>error.status===401||['MFA_REQUIRED','OWNER_ACCESS_DENIED'].includes(error.code);
@@ -113,35 +115,46 @@ async function refreshProof(){
     rememberAccess(result.data);$('#form-error').textContent='Session verified. Review your draft, then save explicitly.';$('#form-error').focus();
   }catch(error){if(generation===authGeneration&&!controller.signal.aborted&&formContext===c){$('#form-error').textContent=error.message;$('#form-error').focus();}}
 }
-function navigation(){const route=(window.location.hash.slice(1)||'dashboard').split('/')[0];$('#navigation').innerHTML='<div class="nav-group">WORKSPACE</div>'+nav.map(([id,name,ico])=>`<a class="nav-link ${route===id?'active':''}" href="#${id}" ${route===id?'aria-current="page"':''}>${icon(ico)}<span>${e(name)}</span>${['dashboard','properties'].includes(id)?'':'<small>Unavailable</small>'}</a>`).join('');$('#crumb').textContent=nav.find(n=>n[0]===route)?.[1]||'Property detail';}
+function navigation(){const route=(window.location.hash.slice(1)||'dashboard').split('/')[0];$('#navigation').innerHTML='<div class="nav-group">WORKSPACE</div>'+nav.map(([id,name,ico])=>`<a class="nav-link ${route===id?'active':''}" href="#${id}" ${route===id?'aria-current="page"':''}>${icon(ico)}<span>${e(name)}</span>${['dashboard','properties','tenants','collections','cheques','expenses','maintenance','reports'].includes(id)?'':'<small>Unavailable</small>'}</a>`).join('');$('#crumb').textContent=nav.find(n=>n[0]===route)?.[1]||'Property detail';}
 async function boot(){
   clearProtected();recoveryView=false;managed=null;const controller=beginRead(),seq=routeSequence;navigation();$('#main').innerHTML='<div class="empty" role="status"><h2>Checking secure access…</h2></div>';$('#main').setAttribute('aria-busy','true');
   try{const result=await api.session(controller.signal);if(!validRead(seq,controller))return;
     try{const state=await api.authState(controller.signal);if(!validRead(seq,controller))return;managed=true;rememberAccess(state.data);if(access.state!=='authenticated'){renderAccess();return;}}
     catch(error){if(error.status!==404)throw error;managed=false;}
     if(!validRead(seq,controller))return;session=result.data;$('#user-context').innerHTML=`<strong>${e(session.name)}</strong><small>${managed?'Owner account':e(session.roles.join(' · '))}</small>`;
-    $('#mode-detail').textContent=session.authenticationProvider==='automated-test'?'Automated test identity · Synthetic records only':'Authenticated property metadata · Financial modules unavailable';
+    $('#mode-detail').textContent=session.authenticationProvider==='automated-test'?'Automated test identity · Synthetic records only':'Authenticated property and rental records · Synthetic development';
     await render();
   }catch(error){if(!validRead(seq,controller))return;if(accessLost(error))await showAccessLoss(error);else{clearProtected();showUnavailable('Backend unavailable',error.message);}}
   finally{if(validRead(seq,controller))$('#main').setAttribute('aria-busy','false');}
 }
 function table(rows){return `<div class="table-wrap" tabindex="0" role="region" aria-label="Property records"><table class="data-table"><thead><tr><th scope="col">Property</th><th scope="col">Location</th><th scope="col">Record status</th><th scope="col">Revision</th><th scope="col">Updated</th></tr></thead><tbody>${rows.map(p=>`<tr><td><button class="record-name" data-action="detail" data-id="${e(p.id)}">${e(p.name)}</button><span class="record-sub">${e(p.id)}</span></td><td>${e(p.location||'Not provided')}</td><td><span class="badge ${p.lifecycleStatus==='archived'?'amber':'green'}">${e(p.lifecycleStatus)}</span></td><td>${p.version}</td><td>${e(date(p.updatedAt))}</td></tr>`).join('')}</tbody></table></div>`;}
 async function render(){
-  invalidateForm();const controller=beginRead(),seq=routeSequence;navigation();if(!session){if(access)renderAccess();else await boot();return;}$('#main').setAttribute('aria-busy','true');
+  resetExpenses();resetRental();invalidateForm();const controller=beginRead(),seq=routeSequence;navigation();if(!session){if(access)renderAccess();else await boot();return;}$('#main').setAttribute('aria-busy','true');
   const route=window.location.hash.slice(1)||'dashboard',main=$('#main');
   main.innerHTML='<div class="empty" role="status"><h2>Loading authorized records…</h2></div>';
   try{
     if(route.startsWith('properties/')){
       const id=route.split('/')[1],result=await api.get(id,controller.signal);if(!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;current=result.data;
       const p=current;main.innerHTML=heading(p.name,'Stable property identity · Metadata only',btn('Back to properties','back')+(can('update')&&p.lifecycleStatus!=='archived'?btn('Edit property','edit','primary'):'')+(can('archive')&&p.lifecycleStatus!=='archived'?btn('Archive','archive','danger'):'')+(can('restore')&&p.lifecycleStatus==='archived'?btn('Restore','restore','primary'):''))+
-        `<section class="panel"><div class="detail-meta"><div><small>Internal ID</small><strong>${e(p.id)}</strong></div><div><small>Record lifecycle</small><strong>${e(p.lifecycleStatus)}</strong></div><div><small>Revision</small><strong>${p.version}</strong></div></div></section><div class="tabs"><button class="tab active" data-action="overview">Overview</button>${['Agreements','Partners','Funding','Rentals','Collections','Expenses','Documents'].map(t=>`<button class="tab" disabled title="Not implemented in this slice">${t}</button>`).join('')}${can('audit')?'<button class="tab" data-action="audit">Audit history</button>':''}</div><section class="panel" id="detail-content"><div class="panel-header"><div><h2>Property metadata</h2><p>Archival changes record visibility only.</p></div></div><dl class="summary-list">${[['Name',p.name],['Location',p.location||'Not provided'],['Counterparty reference',p.counterpartyId||'Not assigned'],['Created',date(p.createdAt)],['Created by',p.createdBy],['Updated',date(p.updatedAt)],['Updated by',p.updatedBy],...(p.archivedAt?[['Archived',date(p.archivedAt)],['Archived by',p.archivedBy],['Archive reason',p.archiveReason]]:[])].map(([a,b])=>`<div><dt>${e(a)}</dt><dd>${e(b)}</dd></div>`).join('')}</dl></section>`;
+        `<section class="panel"><div class="detail-meta"><div><small>Internal ID</small><strong>${e(p.id)}</strong></div><div><small>Record lifecycle</small><strong>${e(p.lifecycleStatus)}</strong></div><div><small>Revision</small><strong>${p.version}</strong></div></div></section><div class="tabs"><button class="tab active" data-action="overview">Overview</button>${managed?'<button class="tab" data-action="rental">Rooms &amp; rentals</button>':''}${managed?'<button class="tab" data-action="property-expenses">Expenses &amp; maintenance</button>':''}${['Partners','Funding','Documents'].map(t=>`<button class="tab" disabled title="Not implemented in this slice">${t}</button>`).join('')}${can('audit')?'<button class="tab" data-action="audit">Audit history</button>':''}</div><section class="panel" id="detail-content"><div class="panel-header"><div><h2>Property metadata</h2><p>Archival changes record visibility only.</p></div></div><dl class="summary-list">${[['Name',p.name],['Location',p.location||'Not provided'],['Counterparty reference',p.counterpartyId||'Not assigned'],['Created',date(p.createdAt)],['Created by',p.createdBy],['Updated',date(p.updatedAt)],['Updated by',p.updatedBy],...(p.archivedAt?[['Archived',date(p.archivedAt)],['Archived by',p.archivedBy],['Archive reason',p.archiveReason]]:[])].map(([a,b])=>`<div><dt>${e(a)}</dt><dd>${e(b)}</dd></div>`).join('')}</dl></section>`;
     }else if(route==='dashboard'&&managed){
       const result=await api.dashboard(controller.signal);if(!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;current=null;page=null;
       const d=result.data;
       main.innerHTML=heading('Property overview','Saved property metadata from your dedicated service.',can('create')?btn('Add property','create','primary'):'')+
         `<div class="metrics owner-metadata-metrics">${[['Total properties',d.totalProperties,'All saved records'],['Active properties',d.activeProperties,'Registered metadata records'],['Archived properties',d.archivedProperties,'History preserved']].map(([label,value,note])=>`<div class="metric"><div class="metric-top"><span>${label}</span>${icon('properties')}</div><div class="metric-value">${e(value)}</div><p class="metric-note">${note}</p></div>`).join('')}</div>`+
         `<section class="panel"><div class="panel-header"><div><h2>Recently updated properties</h2><p>Up to ten saved records · Newest updates first</p></div>${btn('View properties','back')}</div>${d.recentProperties.length?table(d.recentProperties):'<div class="empty"><h2>No authorized properties</h2><p>Add your first property to begin your register.</p></div>'}</section>`+
-        `<div class="metrics owner-metadata-metrics">${['Rental income','Partner returns','Company income'].map(label=>`<div class="metric"><div class="metric-top"><span>${label}</span></div><div class="metric-value unavailable-metric">Unavailable</div><p class="metric-note">Financial module not enabled</p></div>`).join('')}</div>`;
+        `<div class="metrics owner-metadata-metrics">${['Property profit','Partner returns','Company income'].map(label=>`<div class="metric"><div class="metric-top"><span>${label}</span></div><div class="metric-value unavailable-metric">Unavailable</div><p class="metric-note">Financial module not enabled</p></div>`).join('')}</div>`;
+      const rentalTarget=document.createElement('div');rentalTarget.id='rental-dashboard';main.append(rentalTarget);
+      const expenseTarget=document.createElement('div');expenseTarget.id='expense-dashboard';main.append(expenseTarget);
+      const expenseOptions={api,summaryOnly:true,followRentalPeriod:true,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss};
+      await renderRentalDashboard(rentalTarget,{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss,onReportChange:period=>renderExpenses(expenseTarget,{...expenseOptions,period})});
+      if(validRead(seq,controller))await renderExpenses(expenseTarget,{...expenseOptions,period:rentalReportPeriod()});
+    }else if(['expenses','maintenance','reports'].includes(route)&&managed){
+      current=null;page=null;main.innerHTML=heading(route==='reports'?'Monthly property report':route==='maintenance'?'Property maintenance':'Property expenses','Saved property costs and payments. Synthetic development only.')+'<div id="expense-workspace"></div>';
+      await renderExpenses($('#expense-workspace'),{api,summaryOnly:route==='reports',signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
+    }else if(['tenants','collections','cheques'].includes(route)&&managed){
+      current=null;page=null;main.innerHTML=heading(route==='tenants'?'Rooms, tenants & agreements':route==='cheques'?'Cheque register':'Rent collections','Saved room-level records. Synthetic development only.')+'<div id="rental-workspace"></div>';
+      await renderRental($('#rental-workspace'),{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
     }else if(route==='dashboard'||route==='properties'){
       const result=await api.list(filters,controller.signal);if(!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;page=result;current=null;
       main.innerHTML=heading(route==='dashboard'?'Property overview':'Properties','Authenticated records from the dedicated property service.',can('create')?btn('Add property','create','primary'):'')+
@@ -204,6 +217,16 @@ document.addEventListener('click',async event=>{
     const controller=beginRead();
     try{const result=await api.get(c.property.id,controller.signal);if(formContext!==c||generation!==authGeneration||controller.signal.aborted)return;if(!await syncAccess(controller.signal)||formContext!==c)return;c.property=result.data;pending=null;$('#dialog-body').querySelectorAll('input,textarea,select').forEach(input=>input.disabled=false);$('#conflict-review').innerHTML=`<p>Latest revision ${result.data.version}: ${e(result.data.name)} · ${e(result.data.location||'No location')}. Your draft remains above. Review it before saving.</p>`;}
     catch(error){if(formContext!==c||generation!==authGeneration||controller.signal.aborted)return;if(accessLost(error))await showAccessLoss(error);else if(error.status===404){current=null;invalidateForm();showUnavailable('Property unavailable',error.message);}else $('#form-error').textContent=error.message;}return;
+  }
+  if(action==='property-expenses'){
+    if(!current||!managed)return;const controller=beginRead(),seq=routeSequence,p=current;
+    document.querySelectorAll('.tabs .tab').forEach(tab=>tab.classList.toggle('active',tab===target));
+    await renderExpenses($('#detail-content'),{api,property:p,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});return;
+  }
+  if(action==='rental'){
+    if(!current||!managed)return;const controller=beginRead(),seq=routeSequence,p=current;
+    document.querySelectorAll('.tabs .tab').forEach(tab=>tab.classList.toggle('active',tab===target));
+    await renderRental($('#detail-content'),{api,property:p,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});return;
   }
   if(action==='audit'){
     if(!current)return;const id=current.id,controller=beginRead(),seq=routeSequence;

@@ -4,7 +4,15 @@ import { PropertyService, safeUnexpected } from './service';
 import { ApiError, requireThat } from './errors';
 import { uuid } from './validation';
 import { securityLogger,logSafely,type SecurityLogger } from './security-log';
+import { RentalService } from './rental';
+import { ExpenseService } from './expenses';
 const base='/api/hamdee/v1';
+async function readJson(request:Request):Promise<unknown> {
+  requireThat(request.headers.get('content-type')?.split(';')[0]==='application/json',415,'JSON_REQUIRED','Submit JSON metadata.');
+  const reader=request.body?.getReader();let length=0;const chunks:Uint8Array[]=[];
+  if(reader){while(true){const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>16384){await reader.cancel();throw new ApiError(413,'PAYLOAD_TOO_LARGE','The submission is too large.');}chunks.push(value);}}
+  try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new ApiError(400,'INVALID_JSON','Submit valid JSON metadata.');}
+}
 export function createHandler(provider:IdentityProvider,service:PropertyService,logger:SecurityLogger=securityLogger) {
   return async function handle(request:Request):Promise<Response> {
     const requestId=randomUUID();
@@ -18,6 +26,19 @@ export function createHandler(provider:IdentityProvider,service:PropertyService,
       requireThat(url.pathname===base||url.pathname.startsWith(base+'/'),404,'NOT_FOUND','Endpoint not found.');
       const path=url.pathname.slice(base.length).replace(/\/$/,'');
       if(path==='/session'&&request.method==='GET') return json({data:{...session,authenticationProvider:provider.kind||'server-validated'}});
+      if(path==='/rental'||path==='/expenses'){
+        const rental=path==='/rental'?new RentalService(service):new ExpenseService(service);
+        if(request.method==='GET'){
+          requireThat([...url.searchParams.keys()].every(k=>['month','asOf','propertyId'].includes(k)&&url.searchParams.getAll(k).length===1),400,'INVALID_QUERY','Check rental filters.');
+          const today=new Date().toISOString().slice(0,10);
+          return json({data:await rental.overview(identity,{month:url.searchParams.get('month')??today.slice(0,7),asOf:url.searchParams.get('asOf')??today,propertyId:url.searchParams.get('propertyId')??undefined})});
+        }
+        requireThat(request.method==='POST',405,'METHOD_NOT_ALLOWED','This method is unavailable.');
+        requireThat(request.headers.get('origin')===url.origin,403,'ORIGIN_REJECTED','This request origin is not permitted.');
+        const key=request.headers.get('idempotency-key');requireThat(key&&uuid.test(key),400,'IDEMPOTENCY_KEY_REQUIRED','A valid operation key is required.');
+        const result=await rental.mutate(identity,await readJson(request),key,requestId);
+        return json(result,200,result.replay?{'Idempotent-Replay':'true'}:{});
+      }
       if(path==='/dashboard'&&request.method==='GET'){
         requireThat([...url.searchParams.keys()].length===0,400,'INVALID_QUERY','Check the dashboard request.');
         return json({data:await service.dashboard(identity)});
@@ -55,10 +76,7 @@ export function createHandler(provider:IdentityProvider,service:PropertyService,
         const match=request.headers.get('if-match')?.match(/^"property:([^:]+):(\d+)"$/);
         requireThat(match&&match[1]===id&&Number.isSafeInteger(Number(match[2]))&&Number(match[2])>0,428,'PRECONDITION_REQUIRED','A current property revision is required.');expected=Number(match[2]);
       }
-      requireThat(request.headers.get('content-type')?.split(';')[0]==='application/json',415,'JSON_REQUIRED','Submit JSON metadata.');
-      const reader=request.body?.getReader();let length=0;const chunks:Uint8Array[]=[];
-      if(reader){while(true){const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>16384){await reader.cancel();throw new ApiError(413,'PAYLOAD_TOO_LARGE','The submission is too large.');}chunks.push(value);}}
-      let body:unknown;try{body=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new ApiError(400,'INVALID_JSON','Submit valid JSON metadata.');}
+      const body=await readJson(request);
       const result=await service.mutate(identity,{action,id,key,expected,body,requestId});
       return json({data:result.data},result.status,{ETag:`"property:${result.data.id}:${result.data.version}"`,
         ...(action==='create'?{Location:`${base}/properties/${result.data.id}`}:{ }),...(result.replay?{'Idempotent-Replay':'true'}:{})});

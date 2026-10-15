@@ -1,4 +1,5 @@
 import { LocalPostgresDatabase,type Database } from './database';
+import { HostedPostgresDatabase,reviewedHostedDatabasePins } from './hosted-database';
 import { createOwnerAuth,createManagedOwnerProvider,type OwnerAuthOptions,type OwnerAuthorization,type OwnerAuthFlow } from './owner-auth';
 import type { SecurityLogger } from './security-log';
 import { createHandler,unavailable } from './http';
@@ -11,6 +12,7 @@ import { uuid } from './validation';
 export interface OwnerApplicationOptions extends OwnerAuthOptions {
   readonly database:Database;
   readonly logger?:SecurityLogger;
+  readonly databaseEnvironment?:'local-test'|'synthetic-development';
 }
 export interface OwnerApplication {
   handleAuth(request:Request):Promise<Response>;
@@ -20,7 +22,7 @@ export interface OwnerApplication {
  * Caller owns database cleanup. No provider/database work at construction. */
 export function createOwnerApplication(options:OwnerApplicationOptions):OwnerApplication {
   const auth=createOwnerAuth(options),owner=Object.freeze({...options.policy.owner}),logger=options.logger,
-    service=new PropertyService({transaction:options.database.transaction.bind(options.database)},owner);
+    service=new PropertyService({transaction:options.database.transaction.bind(options.database)},owner,options.databaseEnvironment);
   const cookieFlags=`Path=/; HttpOnly; SameSite=Strict${options.policy.cookieSecure?'; Secure':''}; Max-Age=0`;
   const clear=[`hamdee_owner=; ${cookieFlags}`,`hamdee_csrf=; ${cookieFlags}`];
   function failed(error:unknown,erase=false):Response {
@@ -66,10 +68,14 @@ let configured:OwnerApplication|null=null;
 function configuredApplication():OwnerApplication|null {
   if(configured)return configured;
   // Activation requires a separately approved exact environment. No fallback,
-  // generic SUPABASE_/DATABASE_URL, test identity or hosted SQL connection.
+  // generic SUPABASE_/DATABASE_URL or test identity.
   if(process.env.HAMDEE_OWNER_RUNTIME_APPROVAL!=='approved-development-owner-runtime')return null;
   const e=process.env;
   try{
+    requireThat(!e.HAMDEE_DATABASE_MODE||['local','hosted-development'].includes(e.HAMDEE_DATABASE_MODE),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
+    const hosted=e.HAMDEE_DATABASE_MODE==='hosted-development';
+    requireThat(!hosted||(e.HAMDEE_HOSTED_DATABASE_APPROVAL==='approved-synthetic-development-database'&&reviewedHostedDatabasePins!==null&&
+      e.VERCEL_ENV==='preview'),503,'CONFIGURATION_UNAVAILABLE','Reviewed Preview database configuration is required.');
     requireThat(e.HAMDEE_APP_ID==='hamdee'&&e.HAMDEE_ENVIRONMENT==='development'&&e.HAMDEE_DATA_CLASS==='synthetic_only'&&
       e.HAMDEE_REGION==='ap-southeast-1'&&e.HAMDEE_RESIDENCY_DECISION==='approved_synthetic_development_only'&&
       !!e.HAMDEE_PROJECT_OWNER?.trim()&&e.HAMDEE_PROJECT_REF==='dytlzfwbgeuhzgzemqsf'&&
@@ -89,7 +95,8 @@ function configuredApplication():OwnerApplication|null {
       csrfLifetimeMs:number('HAMDEE_OWNER_CSRF_MS'),mfaMaxAgeMs:number('HAMDEE_OWNER_MFA_MAX_AGE_MS')},
       cookieKey,clock:()=>Date.now(),randomBytes,
       provider:createManagedOwnerProvider({supabaseUrl:e.HAMDEE_SUPABASE_URL,publishableKey:e.HAMDEE_SUPABASE_PUBLISHABLE_KEY??'',requestTimeoutMs:timeout}),
-      database:new LocalPostgresDatabase(e.HAMDEE_DATABASE_URL),
+      database:hosted?new HostedPostgresDatabase(e.HAMDEE_DATABASE_URL,reviewedHostedDatabasePins,e.HAMDEE_DATABASE_CA_PEM):new LocalPostgresDatabase(e.HAMDEE_DATABASE_URL),
+      databaseEnvironment:hosted?'synthetic-development':'local-test',
       limiter:{async consume(flow,_key,now){let b=buckets.get(flow);if(!b||now>=b.reset){b={count:0,reset:now+window,blocked:0};buckets.set(flow,b);}
         if(now<b.blocked)return false;if(++b.count>bounds){b.blocked=now+backoff;return false;}return true;}},
       audit:{async append(event){console.info(JSON.stringify(event));}}
@@ -97,7 +104,8 @@ function configuredApplication():OwnerApplication|null {
     configured=app;return app;
   }catch{return null;}
 }
-/** No normal request can select the injected test provider or a hosted DB. */
+/** No normal request can select the injected test provider. Hosted access also
+ * requires separately reviewed pins, activation approval and Preview scope. */
 export async function handleOwnerAuthRequest(request:Request):Promise<Response> {
   return configuredApplication()?.handleAuth(request)??unavailable();
 }
