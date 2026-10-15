@@ -1,6 +1,7 @@
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { createManagedOwnerProvider } from '../src/owner-auth';
 import { createOwnerQaFixture, ownerQaDeferred, ownerQaInputs, OTHER_QA_SUBJECT, OWNER_QA_FACTOR } from './support/owner-crm-harness';
 
@@ -260,4 +261,73 @@ test('Owner SDK QA: global sign-out invalidates copied refresh input without any
   const f = sdkTransport(), session = await f.provider.signIn(f.inputs.email, f.inputs.password);
   await f.provider.signOut(session.tokens); await assert.rejects(() => f.provider.verifySession(session.tokens));
   assert.ok(f.facts.calls.some(call => call.includes('/logout') && call.includes('scope=global')));
+});
+
+test('Owner runtime diagnostic: fixed server categories omit secret canaries and preserve fail-closed responses', () => {
+  const env:NodeJS.ProcessEnv={NODE_ENV:'test'};
+  for(const name of ['SystemRoot','WINDIR','TEMP','TMP','PATH','ComSpec'])if(process.env[name])env[name]=process.env[name]!;
+  const code=`
+    import assert from 'node:assert/strict';
+    import net from 'node:net';
+    let fetches=0,sockets=0;
+    globalThis.fetch=async()=>{fetches++;throw new Error('PRIVATE_PROVIDER_ERROR_CANARY');};
+    net.Socket.prototype.connect=function(){sockets++;throw new Error('PRIVATE_SOCKET_ERROR_CANARY');};
+    const warnings=[];console.warn=(...args)=>{warnings.push(args);};
+    const {handleOwnerAuthRequest,handleOwnerPropertyRequest}=await import('./src/owner-runtime.ts');
+    const base={
+      HAMDEE_OWNER_RUNTIME_APPROVAL:'approved-development-owner-runtime',HAMDEE_APP_ID:'hamdee',
+      HAMDEE_ENVIRONMENT:'development',HAMDEE_DATA_CLASS:'synthetic_only',HAMDEE_PROJECT_OWNER:'PRIVATE_OWNER_CANARY',
+      HAMDEE_PROJECT_REF:'dytlzfwbgeuhzgzemqsf',HAMDEE_REGION:'ap-southeast-1',
+      HAMDEE_RESIDENCY_DECISION:'approved_synthetic_development_only',
+      HAMDEE_SUPABASE_URL:'https://dytlzfwbgeuhzgzemqsf.supabase.co',
+      HAMDEE_AUTH_ISSUER:'https://dytlzfwbgeuhzgzemqsf.supabase.co/auth/v1',HAMDEE_AUTH_AUDIENCE:'authenticated',
+      HAMDEE_SUPABASE_PUBLISHABLE_KEY:'sb_publishable_PRIVATE_KEY_CANARY',
+      HAMDEE_OWNER_SUBJECT:'44440000-1111-4111-8111-111111111111',HAMDEE_OWNER_EMAIL:'private-email-canary@example.invalid',
+      HAMDEE_OWNER_ORIGIN:'https://synthetic.invalid',HAMDEE_OWNER_COOKIE_KEY:Buffer.alloc(32,12).toString('base64url'),
+      HAMDEE_DATABASE_MODE:'hosted-development',HAMDEE_HOSTED_DATABASE_APPROVAL:'approved-synthetic-development-database',
+      HAMDEE_DATABASE_URL:'postgres://hamdee_backend.dytlzfwbgeuhzgzemqsf:PRIVATE_DATABASE_CANARY@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres',
+      VERCEL_ENV:'preview',HAMDEE_OWNER_IDLE_MS:'900000',HAMDEE_OWNER_ABSOLUTE_MS:'28800000',
+      HAMDEE_OWNER_CSRF_MS:'60000',HAMDEE_OWNER_AUTH_TIMEOUT_MS:'3000',HAMDEE_OWNER_RATE_WINDOW_MS:'60000',
+      HAMDEE_OWNER_RATE_BOUNDS:'30',HAMDEE_OWNER_RATE_BACKOFF_MS:'60000'
+    };
+    const [stage,patch,loggerFails]=JSON.parse(process.argv[1]);
+    Object.assign(process.env,base,patch);
+    if(loggerFails)console.warn=()=>{throw new Error('PRIVATE_LOGGER_ERROR_CANARY');};
+    for(const path of ['/api/hamdee/auth/state','/api/hamdee/auth/state','/api/hamdee/v1/properties']){
+      const request=new Request('https://synthetic.invalid'+path);
+      const response=await(path.includes('/auth/')?handleOwnerAuthRequest(request):handleOwnerPropertyRequest(request));
+      assert.equal(response.status,503);assert.equal(response.headers.get('cache-control'),'private, no-store');
+      assert.equal(response.headers.get('x-content-type-options'),'nosniff');
+      const body=await response.json();assert.equal(body.error.code,'CONFIGURATION_UNAVAILABLE');
+      assert.deepEqual(Object.keys(body).sort(),['error','requestId']);
+      assert.doesNotMatch(JSON.stringify(body),/CANARY|stage|owner_configuration|synthetic\\.invalid|supabase/i);
+    }
+    if(loggerFails)assert.deepEqual(warnings,[]);
+    else{
+      assert.equal(warnings.length,1);assert.equal(warnings[0].length,1);
+      const event=JSON.parse(warnings[0][0]);
+      assert.deepEqual(event,{event:'owner_configuration_unavailable',stage});
+      assert.doesNotMatch(JSON.stringify(warnings),/CANARY|password|sb_publishable|postgres:|supabase\\.co/);
+    }
+    assert.equal(fetches,0);assert.equal(sockets,0);
+  `;
+  const scenarios:[string,Record<string,string>,boolean?][]=[
+    ['runtime_approval',{HAMDEE_OWNER_RUNTIME_APPROVAL:'PRIVATE_APPROVAL_CANARY'}],
+    ['database_mode',{HAMDEE_DATABASE_MODE:'PRIVATE_MODE_CANARY'}],
+    ['hosted_scope',{VERCEL_ENV:'production'}],
+    ['identity_configuration',{HAMDEE_OWNER_EMAIL:'PRIVATE_MAILBOX_CANARY'}],
+    ['cookie_key',{HAMDEE_OWNER_COOKIE_KEY:'A'.repeat(42)+'B'}],
+    ['security_budgets',{HAMDEE_OWNER_RATE_BOUNDS:'PRIVATE_BUDGET_CANARY'}],
+    ['session_policy',{HAMDEE_OWNER_IDLE_MS:'900001'}],
+    ['provider_configuration',{HAMDEE_SUPABASE_PUBLISHABLE_KEY:'PRIVATE_KEY_CANARY'}],
+    ['database_configuration',{HAMDEE_DATABASE_CA_PEM:'PRIVATE_CA_CANARY'}],
+    ['application_configuration',{HAMDEE_OWNER_ORIGIN:'https://synthetic.invalid/'}],
+    ['identity_configuration',{HAMDEE_OWNER_EMAIL:'PRIVATE_MAILBOX_CANARY'},true]
+  ];
+  for(const scenario of scenarios){
+    const child=spawnSync(process.execPath,['--import','tsx','--input-type=module','-e',code,JSON.stringify(scenario)],{
+      cwd:new URL('../',import.meta.url),env,encoding:'utf8',windowsHide:true,timeout:15000});
+    assert.equal(child.status,0,`${scenario[0]}: ${child.stderr}`);
+    assert.equal(child.stdout,'');assert.equal(child.stderr,'');
+  }
 });
