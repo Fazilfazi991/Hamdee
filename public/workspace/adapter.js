@@ -14,13 +14,13 @@ export class PropertyApi {
     return result;
   }
   rememberState(data){
-    if(!data||!['anonymous','mfa_required','authenticated','recovery_pending'].includes(data.state)||typeof data.csrfToken!=='string'||!data.csrfToken||!Array.isArray(data.factors)||!data.factors.every(f=>f&&typeof f.id==='string'&&f.id&&['verified','unverified'].includes(f.status))||(data.expiresAt!==null&&(!Number.isSafeInteger(data.expiresAt)||data.expiresAt<0))){throw new Error('The service returned an invalid access state. Check the connection before continuing.');}
+    if(!data||!['anonymous','authenticated','recovery_pending'].includes(data.state)||typeof data.csrfToken!=='string'||!data.csrfToken||!Array.isArray(data.factors)||data.factors.length!==0||(data.expiresAt!==null&&(!Number.isSafeInteger(data.expiresAt)||data.expiresAt<0))){throw new Error('The service returned an invalid access state. Check the connection before continuing.');}
     this.csrfToken=data.csrfToken;
-    return {state:data.state,csrfToken:data.csrfToken,expiresAt:data.expiresAt,factors:data.factors.map(f=>({id:f.id,status:f.status}))};
+    return {state:data.state,csrfToken:data.csrfToken,expiresAt:data.expiresAt,factors:[]};
   }
   authState(signal){return this.fetchJson('/api/hamdee/auth/state',{signal});}
   auth(action,body={},signal){
-    if(!['login','mfa/enroll','mfa/verify','refresh','logout','recovery'].includes(action))throw new Error('This account action is unavailable.');
+    if(!['login','refresh','logout','recovery'].includes(action))throw new Error('This account action is unavailable.');
     if(!this.csrfToken){const error=new Error('Check your session before submitting this action.');error.code='CSRF_REJECTED';error.status=403;throw error;}
     return this.fetchJson('/api/hamdee/auth/'+action,{method:'POST',signal,headers:{'Content-Type':'application/json','X-Hamdee-CSRF':this.csrfToken},body:JSON.stringify(body)});
   }

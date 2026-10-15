@@ -162,9 +162,11 @@ test('Expense QA: monthly property/category/currency summaries exclude deposits 
   const filtered = await read(f, '2026-10', '2026-10-15', p.id); assert.ok(filtered.expenses.every((e: Row) => e.propertyId === p.id)); assert.equal(filtered.summary.currencies.find((s: Row) => s.currency === 'QAR').expenseMinor, '6000');
 });
 
-test('Expense QA: owner/MFA/CSRF/expiry/disabled membership and nonowner restrictions apply to expenses', async t => {
+test('Expense QA: confirmed password owner is allowed; CSRF/expiry/disabled membership and nonowner restrictions remain', async t => {
   const f = await createOwnerQaFixture(); t.after(() => f.close()); await deny(await f.request('GET', base + '/expenses?month=2026-10&asOf=2026-10-15'));
-  await f.login(false); await deny(await f.request('GET', base + '/expenses?month=2026-10&asOf=2026-10-15'));
+  await f.login(false); await body(await f.request('GET', base + '/expenses?month=2026-10&asOf=2026-10-15'));
+  assert.equal(f.fake.facts.calls.mfa, 0); f.fake.facts.emailConfirmed = false;
+  await deny(await f.request('GET', base + '/expenses?month=2026-10&asOf=2026-10-15')); f.fake.facts.emailConfirmed = true;
   await f.login(); const p = await property(f);
   await deny(await write(f, 'record-expense', expense(p.id), randomUUID(), { 'X-Hamdee-CSRF': '' }));
   await deny(await write(f, 'record-expense', expense(p.id), randomUUID(), { Origin: 'https://foreign.example.invalid' })); assert.equal((await read(f)).expenses.length, 0);

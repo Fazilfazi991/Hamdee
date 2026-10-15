@@ -33,7 +33,7 @@ test('Owner persistence: identical retry commits once; changed payload/key confl
   await body(await f.request('PATCH', base + '/properties/' + created.id, { name: 'Synthetic stale revision' }, pre(created.id, 1)), 412);
   assert.equal((await body(await f.request('GET', base + '/dashboard'), 200)).data.totalProperties, 1);
 });
-test('Owner persistence: fresh DB disablement or missing Admin portfolio blocks valid owner MFA', async t => {
+test('Owner persistence: fresh DB disablement or missing Admin portfolio blocks valid owner password authentication', async t => {
   for (const mode of ['disabled', 'grant'] as const) {
     const f = await fixture(t);
     if (mode === 'disabled') await f.pg!.query('UPDATE hamdee_private.app_users SET enabled=false WHERE id=$1', [f.member!.id]);

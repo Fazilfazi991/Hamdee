@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
 import { LocalPostgresDatabase } from '../../src/database';
 import { up } from '../support/fixture';
-import { createOwnerQaFixture, ownerNativeConnection, seedOwnerAppRecords, OwnerCookieJar, ownerQaInputs, startOwnerAppProcess, OWNER_QA_FACTOR } from '../support/owner-crm-harness';
+import { createOwnerQaFixture, ownerNativeConnection, seedOwnerAppRecords, OwnerCookieJar, ownerQaInputs, startOwnerAppProcess } from '../support/owner-crm-harness';
 
 const connection = process.env.HAMDEE_OWNER_NATIVE_TEST_URL;
 const native = { skip: connection ? false : 'BLOCKED: no explicitly owned disposable native owner database supplied' };
@@ -73,8 +73,6 @@ test('Owner native: actual app-process restart/new session preserves saved prope
   const login = async () => {
     await value(await request('GET', '/api/hamdee/auth/state'), 200);
     await value(await request('POST', '/api/hamdee/auth/login', { email: inputs.email, password: inputs.password }), 200);
-    await value(await request('POST', '/api/hamdee/auth/mfa/enroll', {}), 200);
-    await value(await request('POST', '/api/hamdee/auth/mfa/verify', { factorId: OWNER_QA_FACTOR, code: inputs.validTotp }), 200);
   };
   try {
     await login(); const p = (await value(await request('POST', base + '/properties', { name: inputs.propertyName }, { 'Idempotency-Key': randomUUID() }), 201)).data;

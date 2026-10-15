@@ -2,7 +2,7 @@
 
 Standalone Next.js application preserving the HAMDEE interface, managed owner authentication adapter and transactional PostgreSQL property foundation. One approved owner/admin manages multiple properties. Partners and tenants are records, not login roles in this milestone.
 
-The local slice covers managed owner login/MFA, property create/edit/archive/restore/history, rooms, tenant contacts, dated agreements/renewals, explicit monthly dues and collections. Dashboard room occupancy and rent balances come from saved records. Property profit, partner returns and the remaining financial modules are not activated. CP1/CP2 reference modules and regression coverage are retained.
+The local slice covers managed owner email/password login, property create/edit/archive/restore/history and the existing room, tenant, agreement, dues, collection, deposit, expense, maintenance and report workflows. Dashboard room occupancy and rent balances come from saved records. This authentication change preserves their existing calculations and persistence. CP1/CP2 reference modules and regression coverage are retained.
 
 Open a property and choose **Rooms & rentals**, or use **Tenants & agreements** / **Collections**. Add a room and tenant, save an agreement, then issue its explicit monthly amount and due date. Cash/bank rent receipts allocate to selected dues; cheques are pending records without clearance. Advances require explicit dated allocation; deposits and refunds remain separate. Reports use a chosen month and occupancy/balance date, with currencies kept separate. No automatic proration, rent escalation or partner-profit rules are applied.
 
@@ -93,7 +93,7 @@ HAMDEE_OWNER_COOKIE_KEY
 HAMDEE_OWNER_IDLE_MS
 HAMDEE_OWNER_ABSOLUTE_MS
 HAMDEE_OWNER_CSRF_MS
-HAMDEE_OWNER_MFA_MAX_AGE_MS
+HAMDEE_OWNER_EMAIL
 HAMDEE_OWNER_AUTH_TIMEOUT_MS
 HAMDEE_OWNER_RATE_WINDOW_MS
 HAMDEE_OWNER_RATE_BOUNDS
@@ -104,9 +104,9 @@ The existing nonsecret project/development pins remain in source. Do not enable 
 
 ## API and security boundary
 
-Auth base: `/api/hamdee/auth`, with state, login, TOTP enrollment/verification, refresh, logout and recovery-preparation endpoints. Protected metadata base: `/api/hamdee/v1`, with session, dashboard and existing property commands/history. Success uses `{data,requestId}`; safe errors use `{error:{code,message},requestId}`. Property mutations retain UUID idempotency keys and ETag/If-Match revision checks.
+Auth base: `/api/hamdee/auth`, with state, email/password login, refresh, logout and recovery-preparation endpoints; TOTP endpoints are inactive. Protected metadata base: `/api/hamdee/v1`, with session, dashboard and existing property commands/history. Success uses `{data,requestId}`; safe errors use `{error:{code,message},requestId}`. Property mutations retain UUID idempotency keys and ETag/If-Match revision checks.
 
-Server checks pin trusted issuer and immutable owner ID, require current verified TOTP and fresh enabled database Admin/portfolio membership, and enforce exact Origin/session-bound CSRF for unsafe requests. Raw provider credentials remain in authenticated-encryption HttpOnly cookies; browser JSON exposes safe auth state and CSRF only. Sign-in never creates or enables database membership.
+Server checks pin trusted issuer, immutable owner ID and the configured confirmed mailbox, require verified password authentication and fresh enabled database Admin/portfolio membership, and enforce exact Origin/session-bound CSRF for unsafe requests. Raw provider credentials remain in authenticated-encryption HttpOnly cookies; browser JSON exposes safe auth state and CSRF only. Sign-in never creates or enables database membership.
 
 Managed refresh gates and precommit checks preserve fail-closed behavior, but provider/SQL are not one distributed transaction. Multiple refreshes per request add latency and rotation/rate pressure; delayed cookie responses may force reauthentication. Real-provider concurrency, outages and revocation timing require separate acceptance. Failed provider sign-out is explicitly unconfirmed; clearing local cookies alone does not revoke an independent copy. Recovery is preparation/manual review only: no email/SMS, password/factor reset or durable recovery hold is implemented. Current in-process limiter and console auth audit are local-development provisions.
 
@@ -122,10 +122,12 @@ HAMDEE uses the existing Supabase Free plan. Synthetic development does not requ
 
 Enable runtime only on a separately approved Vercel Preview with HAMDEE_DATABASE_MODE=hosted-development and HAMDEE_HOSTED_DATABASE_APPROVAL=approved-synthetic-development-database, all existing owner runtime fields and reviewed source pins. VERCEL_ENV must be preview. No host/account secret is stored in this repository. Server-only variables, exact Preview HTTPS origin, immutable owner UUID and a dedicated cookie key must be configured through authorized platform secret handling.
 
-Managed Auth setup requires one explicitly authorized synthetic mailbox/account, disabled public signup, enabled TOTP enrollment/verification and an enabled internal owner Admin/portfolio grant tied to the project's issuer and user UUID. No staff accounts or portals. Confirm the owner-controlled authenticator and recovery custodian; do not paste passwords, OTP seeds or recovery secrets into reports. Until a recovery procedure is approved, recovery is preparation only. An authorized operator must disable database membership and revoke provider sessions before resetting credentials/factors, then reenable access only after verified MFA. The application does not implement a durable self-service recovery hold.
+Managed Auth setup requires one explicitly approved mailbox/account, disabled public signup, a confirmed exact mailbox, password-primary managed session and an enabled internal owner Admin/portfolio grant tied to the project's issuer and immutable user UUID. No staff accounts, portals or mandatory authenticator enrollment. Confirm the approved recovery custodian; never put credentials or recovery secrets in reports. Until a recovery procedure is approved, recovery is preparation only. An authorized operator must disable database membership and revoke provider sessions before resetting credentials, then reenable access only after verified owner identity and password authentication. The application does not implement a durable self-service recovery hold.
 
-Required hosted acceptance after activation: actual provider sign-in/TOTP/logout/revocation/expiry and concurrent refresh; wrong-owner and missing-MFA denial; dashboard/property CRUD/archive/restore/history; persistence after reopen; duplicate/stale-write/rollback behavior; provider/database outages and desktop/mobile browser flows. Local synthetic tests and TLS handshakes do not establish hosted acceptance.
+Required hosted acceptance after activation: actual provider email/password sign-in/logout/revocation/expiry and concurrent refresh; wrong-owner, unconfirmed-mailbox and missing-password-proof denial; dashboard/property CRUD/archive/restore/history; persistence after reopen; duplicate/stale-write/rollback behavior; provider/database outages and desktop/mobile browser flows. Local synthetic tests and TLS handshakes do not establish hosted acceptance.
 
 ## Design and references
 
 See [DESIGN.md](DESIGN.md), [CP1 technical reference](docs/security/CP1_CONTRACT.md) and [CP2 technical reference](docs/security/CP2_LOCAL_CONTRACT.md). The five shared HAMDEE assets are repository source under `public/shared/`; `pnpm run assets` verifies their hashes. Inter's license is included as `public/shared/OFL.txt`. No dependency on a parent Fusion Ventures checkout remains.
+
+The active single-owner release uses managed email/password login directly into the dashboard. It does not enroll or challenge authenticators and has no factor-freshness gate. Historical CP1/CP2 security contracts remain preserved. Provider errors are enforced; this code does not suppress provider restrictions. The owner approved 15-minute idle and 8-hour absolute limits; the real entrypoint requires those exact explicit settings. Tests may inject shorter clocks for repeatable boundary coverage. The sealed cookie binds the original verified password AMR time; refresh/activity cannot replace it or extend absolute lifetime. Changes to optional factor metadata do not become an application login requirement. Cookies from the previous authentication contract require a fresh password login.

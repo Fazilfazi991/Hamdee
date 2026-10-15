@@ -181,10 +181,12 @@ test('Rental QA: deposit refund cannot borrow a future deposit or invalidate a l
   const later = (await read(f, '2026-10', '2026-10-31')).summary.currencies[0]; assert.equal(later.depositMinor, '60000'); assert.equal(later.collectedMinor, '0');
 });
 
-test('Rental QA: missing owner, pending MFA, CSRF, disabled membership and expiry deny rental access', async t => {
+test('Rental QA: confirmed password owner is allowed; missing identity, CSRF, disabled membership and expiry deny', async t => {
   const f = await createOwnerQaFixture(); t.after(() => f.close());
   await denied(await f.request('GET', base + '/rental?month=2026-10&asOf=2026-10-15'));
-  await f.login(false); await denied(await f.request('GET', base + '/rental?month=2026-10&asOf=2026-10-15'));
+  await f.login(false); await result(await f.request('GET', base + '/rental?month=2026-10&asOf=2026-10-15'));
+  assert.equal(f.fake.facts.calls.mfa, 0); f.fake.facts.emailConfirmed = false;
+  await denied(await f.request('GET', base + '/rental?month=2026-10&asOf=2026-10-15')); f.fake.facts.emailConfirmed = true;
   await f.login(); const p = await property(f);
   await denied(await write(f, 'create-room', { propertyId: p.id, code: 'BLOCKED' }, randomUUID(), { 'X-Hamdee-CSRF': '' }));
   assert.equal((await read(f)).rooms.length, 0);

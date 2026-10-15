@@ -20,7 +20,7 @@ test('Owner QA: anonymous preflight supplies CSRF while direct protected request
   await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 401, 'UNAUTHENTICATED');
   await result(await f.request('GET', '/api/hamdee/v1/session', undefined, { Authorization: 'Bearer synthetic-owner-claim' }), 401, 'UNAUTHENTICATED');
 });
-test('Owner QA: configured owner with synthetic managed TOTP reaches protected dashboard', async t => {
+test('Owner QA: confirmed configured owner password session reaches protected dashboard', async t => {
   const f = await fixture(t); await f.login();
   assert.equal((await result(await f.auth('GET', 'state'), 200)).data.state, 'authenticated');
   const context = await result(await f.request('GET', '/api/hamdee/v1/session'), 200);
@@ -28,14 +28,14 @@ test('Owner QA: configured owner with synthetic managed TOTP reaches protected d
   const dashboard = await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 200);
   assert.deepEqual(dashboard.data, { totalProperties: 0, activeProperties: 0, archivedProperties: 0, recentProperties: [] });
 });
-test('Owner QA: owner aal1 and invalid TOTP cannot read or mutate property data', async t => {
+test('Owner QA: owner aal1 password session reads properties without MFA enrollment', async t => {
   const f = await fixture(t); await f.login(false);
-  await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 403, 'MFA_REQUIRED');
-  await result(await f.request('POST', '/api/hamdee/v1/properties', { name: f.inputs.propertyName }, { 'Idempotency-Key': crypto.randomUUID() }), 403, 'MFA_REQUIRED');
-  await result(await f.auth('POST', 'mfa/enroll', {}), 200);
-  await result(await f.auth('POST', 'mfa/verify', { factorId: OWNER_QA_FACTOR, code: '000000' }), 403, 'MFA_REQUIRED');
-  assert.equal((await f.pg!.query<{ count: number }>('SELECT count(*)::int AS count FROM hamdee_private.properties')).rows[0].count, 0);
+  await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 200);
+  await result(await f.auth('POST', 'mfa/enroll', {}), 404, 'NOT_FOUND');
+  await result(await f.auth('POST', 'mfa/verify', { factorId: OWNER_QA_FACTOR, code: '000000' }), 404, 'NOT_FOUND');
+  assert.equal(f.fake.facts.calls.enroll, 0); assert.equal(f.fake.facts.calls.mfa, 0);
 });
+
 test('Owner QA: another authenticated subject or issuer is never elevated by email/claims', async t => {
   for (const mode of ['subject', 'issuer'] as const) {
     const f = await fixture(t); if (mode === 'subject') f.fake.facts.subject = OTHER_QA_SUBJECT; else f.fake.facts.wrongIssuer = true;
@@ -86,25 +86,27 @@ test('Owner QA: state polling and refresh never extend signed idle expiry', asyn
   await result(await f.auth('GET', 'state'), 200); await result(await f.auth('POST', 'refresh', {}), 200);
   f.clock.advance(1); await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 401, 'UNAUTHENTICATED');
 });
-test('Owner QA: active requests and renewed MFA cannot extend original absolute lifetime', async t => {
-  const f = await createOwnerQaFixture({ timings: { idleTimeoutMs: 20_000, absoluteTimeoutMs: 60_000, csrfLifetimeMs: 10_000, mfaMaxAgeMs: 60_000 } });
+test('Owner QA: active requests and refresh cannot extend original absolute lifetime', async t => {
+  const f = await createOwnerQaFixture({ timings: { idleTimeoutMs: 20_000, absoluteTimeoutMs: 60_000, csrfLifetimeMs: 10_000 } });
   t.after(() => f.close()); await f.login(); const start = f.clock.now();
-  for (let i = 0; i < 4; i++) { f.clock.advance(10_000); await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 200); }
-  // Renew MFA at 40s, isolating the 60s absolute deadline from MFA recency.
-  await result(await f.auth('GET', 'state'), 200);
-  await result(await f.auth('POST', 'mfa/verify', { factorId: OWNER_QA_FACTOR, code: f.inputs.validTotp }), 200);
-  f.clock.advance(10_000); await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 200);
+  for (let i = 0; i < 5; i++) { f.clock.advance(10_000); await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 200); }
+  await result(await f.auth('GET', 'state'), 200); await result(await f.auth('POST', 'refresh', {}), 200);
   f.clock.advance(9_999); await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 200);
   assert.equal((await result(await f.auth('GET', 'state'), 200)).data.expiresAt, start + 60_000);
   f.clock.advance(1); await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 401, 'UNAUTHENTICATED');
 });
-test('Owner QA: MFA age expires during active requests while idle and absolute lifetimes remain valid', async t => {
-  const f = await createOwnerQaFixture({ timings: { idleTimeoutMs: 20_000, absoluteTimeoutMs: 120_000, csrfLifetimeMs: 10_000, mfaMaxAgeMs: 15_000 } });
-  t.after(() => f.close()); await f.login(); const start = f.clock.now();
-  for (const elapsed of [5_000, 5_000, 4_999]) { f.clock.advance(elapsed); await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 200); }
-  assert.equal((await result(await f.auth('GET', 'state'), 200)).data.expiresAt, start + 15_000);
-  f.clock.advance(1); await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 403, 'MFA_REQUIRED');
+
+test('Owner QA: changed or unconfirmed provider mailbox and invalid password proof revoke access', async t => {
+  for (const mode of ['email', 'confirmed', 'password'] as const) {
+    const f = await fixture(t); await f.login();
+    if (mode === 'email') f.fake.facts.email = 'another-synthetic-owner@example.invalid';
+    if (mode === 'confirmed') f.fake.facts.emailConfirmed = false;
+    if (mode === 'password') f.fake.facts.passwordAuthenticatedAt = Number.NaN;
+    await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 403, 'OWNER_ACCESS_DENIED');
+    assert.equal(f.jar.values.has('hamdee_owner'), false);
+  }
 });
+
 test('Owner QA: provider/database/limiter/audit failures remain explicit fail-closed failures', async t => {
   const f = await fixture(t); await f.login();
   f.fake.facts.unavailable = true; await result(await f.auth('GET', 'state'), 503, 'AUTH_UNAVAILABLE'); f.fake.facts.unavailable = false;
@@ -121,18 +123,16 @@ test('Owner QA: recovery is preparation only, globally revokes current session a
   await result(await f.request('GET', '/api/hamdee/v1/dashboard', undefined, {}, copied), 401);
   assert.ok(f.fake.facts.calls.signOut > 0);
 });
-test('Owner QA: late refresh or MFA cookie after logout cannot regain managed business access', async t => {
-  for (const phase of ['refresh', 'mfa'] as const) {
-    const f = await fixture(t); await f.login(phase === 'refresh');
-    if (phase === 'mfa') await result(await f.auth('POST', 'mfa/enroll', {}), 200);
-    const copied = f.jar.fork(), gate = { entered: ownerQaDeferred<void>(), release: ownerQaDeferred<void>() };
-    if (phase === 'refresh') f.fake.facts.verifyGate = gate; else f.fake.facts.mfaGate = gate;
-    const late = phase === 'refresh' ? f.auth('POST', 'refresh', {}, {}, copied) : f.auth('POST', 'mfa/verify', { factorId: OWNER_QA_FACTOR, code: f.inputs.validTotp }, {}, copied);
-    await gate.entered.promise; f.fake.facts.verifyGate = null; f.fake.facts.mfaGate = null;
-    await result(await f.auth('POST', 'logout', {}), 200); gate.release.resolve();
-    await late; await result(await f.request('GET', '/api/hamdee/v1/dashboard', undefined, {}, copied), 401);
-  }
+test('Owner QA: late refresh cookie after logout cannot regain managed business access', async t => {
+  const f = await fixture(t); await f.login();
+  const copied = f.jar.fork(), gate = { entered: ownerQaDeferred<void>(), release: ownerQaDeferred<void>() };
+  f.fake.facts.verifyGate = gate;
+  const late = f.auth('POST', 'refresh', {}, {}, copied);
+  await gate.entered.promise; f.fake.facts.verifyGate = null;
+  await result(await f.auth('POST', 'logout', {}), 200); gate.release.resolve();
+  await late; await result(await f.request('GET', '/api/hamdee/v1/dashboard', undefined, {}, copied), 401);
 });
+
 test('Owner QA: strict JSON/body/method validation never creates an identity', async t => {
   const f = await fixture(t); await f.auth('GET', 'state');
   await result(await f.auth('POST', 'login', { email: f.inputs.email, password: f.inputs.password, role: 'admin' }), 422, 'VALIDATION_FAILED');
@@ -140,21 +140,58 @@ test('Owner QA: strict JSON/body/method validation never creates an identity', a
   await result(await f.auth('POST', 'signup', {}), 404, 'NOT_FOUND');
   assert.equal(f.fake.facts.calls.signIn, 0);
 });
-test('Owner QA: returning owner gets aal1 plus existing verified factor and verifies without reenrollment', async t => {
-  const f = await fixture(t); await f.login(); const enrolled = f.fake.facts.calls.enroll;
-  await result(await f.auth('POST', 'logout', {}), 200); await f.login(false);
-  const state = await result(await f.auth('GET', 'state'), 200);
-  assert.equal(state.data.state, 'mfa_required'); assert.deepEqual(state.data.factors, [{ id: OWNER_QA_FACTOR, status: 'verified' }]);
-  await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 403, 'MFA_REQUIRED');
-  await result(await f.auth('POST', 'mfa/verify', { factorId: OWNER_QA_FACTOR, code: f.inputs.validTotp }), 200);
-  await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 200); assert.equal(f.fake.facts.calls.enroll, enrolled);
+test('Owner QA: returning password owner needs no factor enrollment and cannot use another mailbox', async t => {
+  const f = await fixture(t); await f.login(); await result(await f.auth('POST', 'logout', {}), 200);
+  await f.login(false); const state = await result(await f.auth('GET', 'state'), 200);
+  assert.equal(state.data.state, 'authenticated'); assert.deepEqual(state.data.factors, []);
+  await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 200);
+  await result(await f.auth('POST', 'logout', {}), 200);
+  const calls = f.fake.facts.calls.signIn;
+  await result(await f.auth('POST', 'login', { email: 'other@example.invalid', password: f.inputs.password }), 401, 'UNAUTHENTICATED');
+  assert.equal(f.fake.facts.calls.signIn, calls); assert.equal(f.fake.facts.calls.enroll, 0);
 });
-test('Owner QA: abandoned enrollment never becomes account verification or business access on new login', async t => {
-  const f = await fixture(t); await f.login(false); await result(await f.auth('POST', 'mfa/enroll', {}), 200);
-  assert.equal(f.fake.facts.accountFactorVerified, false); await result(await f.auth('POST', 'logout', {}), 200); await f.login(false);
-  const state = await result(await f.auth('GET', 'state'), 200); assert.equal(state.data.state, 'mfa_required');
-  assert.equal(state.data.factors.some((factor: { status: string }) => factor.status === 'verified'), false);
-  await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 403, 'MFA_REQUIRED');
+
+test('Owner QA: optional provider factors never activate app enrollment endpoints or waive password proof', async t => {
+  const f = await fixture(t); f.fake.facts.accountFactorVerified = true;
+  await f.login(false); assert.equal((await result(await f.auth('GET', 'state'), 200)).data.state, 'authenticated');
+  await result(await f.auth('POST', 'mfa/enroll', {}), 404, 'NOT_FOUND');
+  await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 200);
+});
+
+test('Owner QA: optional factor removal and stale factor time never gate a password session', async t => {
+  const f = await fixture(t); f.fake.facts.loginAal2 = true;
+  await f.login(); f.fake.facts.factorActive = false;
+  f.clock.advance(10_000);
+  await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 200);
+  await result(await f.auth('GET', 'state'), 200);
+  await result(await f.auth('POST', 'refresh', {}), 200);
+  assert.equal(f.fake.facts.calls.enroll, 0); assert.equal(f.fake.facts.calls.mfa, 0);
+});
+
+test('Owner QA: provider refresh cannot replace the original password authentication binding', async t => {
+  const f = await fixture(t); await f.login(); f.clock.advance(1);
+  f.fake.facts.passwordAuthenticatedAt = f.clock.now();
+  await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 401, 'UNAUTHENTICATED');
+  assert.equal(f.jar.values.has('hamdee_owner'), false);
+});
+
+test('Owner QA: approved fifteen-minute idle and eight-hour absolute deadlines are strict', async t => {
+  const timings = { idleTimeoutMs: 15 * 60_000, absoluteTimeoutMs: 8 * 60 * 60_000, csrfLifetimeMs: 60_000 };
+  const f = await createOwnerQaFixture({ timings }); t.after(() => f.close()); await f.login();
+  f.clock.advance(timings.idleTimeoutMs - 1);
+  await result(await f.auth('GET', 'state'), 200);
+  await result(await f.auth('POST', 'refresh', {}), 200);
+  f.clock.advance(1);
+  await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 401, 'UNAUTHENTICATED');
+  await f.login(); const start = f.clock.now();
+  for (let elapsed = 10 * 60_000; elapsed < timings.absoluteTimeoutMs; elapsed += 10 * 60_000) {
+    f.clock.advance(10 * 60_000); await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 200);
+  }
+  f.clock.advance(10 * 60_000 - 1);
+  assert.equal((await result(await f.auth('GET', 'state'), 200)).data.expiresAt, start + timings.absoluteTimeoutMs);
+  await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 200);
+  f.clock.advance(1);
+  await result(await f.request('GET', '/api/hamdee/v1/dashboard'), 401, 'UNAUTHENTICATED');
 });
 
 // Actual managed SDK adapter exercised through its injected fetch; every URL
@@ -165,16 +202,17 @@ const sdkSigningKeys = generateKeyPairSync('rsa', { modulusLength: 2048 });
 function sdkTransport() {
   const inputs = ownerQaInputs(), { privateKey, publicKey } = sdkSigningKeys;
   const publicJwk = { ...publicKey.export({ format: 'jwk' }), kid: 'owner-qa-rsa', alg: 'RS256', use: 'sig' };
-  const facts = { revoked: false, anonymous: false, wrongSubject: false, badSignature: false, aal2: false, calls: [] as string[] };
+  const facts = { revoked: false, anonymous: false, wrongSubject: false, badSignature: false, aal2: false, emailConfirmed: true, passwordProof: true, calls: [] as string[] };
+  const passwordTime = Math.floor(Date.now() / 1000);
   const factorId = '44440000-5555-4555-8555-555555555555', sessionId = '44440000-6666-4666-8666-666666666666';
   const user = () => ({ id: facts.wrongSubject ? OTHER_QA_SUBJECT : inputs.ownerSubject, aud: 'authenticated', role: 'authenticated',
-    email: inputs.email, is_anonymous: facts.anonymous, app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: { role: 'admin' },
+    email: inputs.email, email_confirmed_at: facts.emailConfirmed ? new Date().toISOString() : null, is_anonymous: facts.anonymous, app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: { role: 'admin' },
     factors: facts.aal2 ? [{ id: factorId, factor_type: 'totp', status: 'verified', friendly_name: 'Synthetic TOTP' }] : [] });
   const jwt = () => {
     const seconds = Math.floor(Date.now() / 1000), enc = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url');
     const content = enc({ typ: 'JWT', alg: 'RS256', kid: 'owner-qa-rsa' }) + '.' + enc({ iss: inputs.issuer, sub: user().id,
       aud: 'authenticated', role: 'authenticated', iat: seconds, exp: seconds + 3600, session_id: sessionId,
-      aal: facts.aal2 ? 'aal2' : 'aal1', amr: [{ method: 'password', timestamp: seconds }, ...(facts.aal2 ? [{ method: 'totp', timestamp: seconds }] : [])], is_anonymous: facts.anonymous });
+      email: inputs.email, aal: facts.aal2 ? 'aal2' : 'aal1', amr: [...(facts.passwordProof ? [{ method: 'password', timestamp: passwordTime }] : []), ...(facts.aal2 ? [{ method: 'totp', timestamp: seconds }] : [])], is_anonymous: facts.anonymous });
     const signature = sign('RSA-SHA256', Buffer.from(content), privateKey); if (facts.badSignature) signature[0] ^= 1;
     return content + '.' + signature.toString('base64url');
   };
@@ -200,20 +238,22 @@ function sdkTransport() {
   const provider = createManagedOwnerProvider({ supabaseUrl: 'https://' + inputs.projectRef + '.supabase.co', publishableKey: 'sb_publishable_SYNTHETIC_QA_ONLY', requestTimeoutMs: 3000, fetch: fetcher });
   return { provider, facts, inputs, factorId };
 }
-test('Owner SDK QA: concrete adapter uses password/refresh/user/claims and verified factor transport', async () => {
+test('Owner SDK QA: concrete password adapter refreshes signed claims without factor transport', async () => {
   const f = sdkTransport(); const primary = await f.provider.signIn(f.inputs.email, f.inputs.password);
   assert.equal(primary.identity.subject, f.inputs.ownerSubject); assert.equal(primary.assurance, 'aal1');
-  const enrolled = await f.provider.enrollTotp(primary.tokens); const verified = await f.provider.verifyTotp(enrolled.session.tokens, f.factorId, '444444');
-  assert.equal(verified.assurance, 'aal2'); assert.ok(verified.factors.some(factor => factor.status === 'verified'));
-  await f.provider.verifySession(verified.tokens);
+  assert.equal(primary.email, f.inputs.email); assert.equal(primary.emailConfirmed, true); assert.ok(primary.passwordAuthenticatedAt > 0);
+  const refreshed = await f.provider.verifySession(primary.tokens);
+  assert.equal(refreshed.assurance, 'aal1'); assert.equal(refreshed.passwordAuthenticatedAt, primary.passwordAuthenticatedAt);
+  assert.deepEqual(refreshed.factors, []); assert.equal(refreshed.mfaVerifiedAt, null);
   assert.ok(f.facts.calls.some(call => call.includes('grant_type=password')));
   assert.ok(f.facts.calls.some(call => call.includes('grant_type=refresh_token')));
   assert.ok(f.facts.calls.some(call => call.includes('/user')));
+  assert.equal(f.facts.calls.some(call => call.includes('/factors')), false);
 });
 test('Owner SDK QA: anonymous identity and invalid signed claims are rejected by actual adapter', async () => {
-  for (const flag of ['anonymous', 'badSignature'] as const) {
+  for (const flag of ['anonymous', 'badSignature', 'emailConfirmed', 'passwordProof'] as const) {
     const f = sdkTransport(); await f.provider.signIn(f.inputs.email, f.inputs.password);
-    f.facts[flag] = true; await assert.rejects(() => f.provider.signIn(f.inputs.email, f.inputs.password));
+    f.facts[flag] = flag === 'anonymous' || flag === 'badSignature'; await assert.rejects(() => f.provider.signIn(f.inputs.email, f.inputs.password));
   }
 });
 test('Owner SDK QA: global sign-out invalidates copied refresh input without any hosted request', async () => {

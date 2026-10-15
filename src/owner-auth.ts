@@ -7,10 +7,13 @@ import { uuid } from './validation';
 /** Server-only provider credentials; never browser JSON, storage or logs. */
 export interface OwnerTokenPair { readonly accessToken:string;readonly refreshToken:string }
 export interface OwnerTotpFactor { readonly id:string;readonly status:'verified'|'unverified' }
-/** A concrete adapter must actively prove the managed session is still usable,
- * verify JWT claims AND current user/factors, and project only these fields. */
+/** A concrete adapter proves a current managed password session, verified
+ * claims and confirmed mailbox. Factor metadata is compatibility data only. */
 export interface OwnerProviderSession {
   readonly identity:Identity;
+  readonly email:string;
+  readonly emailConfirmed:boolean;
+  readonly passwordAuthenticatedAt:number;
   readonly sessionId:string;
   readonly assurance:'aal1'|'aal2';
   readonly expiresAt:number;
@@ -37,6 +40,7 @@ export interface ManagedOwnerProviderOptions {
 }
 export interface OwnerAuthPolicy {
   readonly owner:Identity;
+  readonly ownerEmail:string;
   readonly projectRef:string;
   readonly origin:string;
   /** false accepted only by injected loopback test compositions. */
@@ -44,7 +48,6 @@ export interface OwnerAuthPolicy {
   readonly idleTimeoutMs:number;
   readonly absoluteTimeoutMs:number;
   readonly csrfLifetimeMs:number;
-  readonly mfaMaxAgeMs:number;
 }
 export type OwnerAuthFlow='login'|'mfa'|'refresh'|'recovery'|'write';
 export interface OwnerRateLimiter {
@@ -65,7 +68,7 @@ export interface OwnerAuthOptions {
   readonly limiter:OwnerRateLimiter;
   readonly audit:OwnerAuthAudit;
 }
-export type OwnerAuthPhase='anonymous'|'mfa_required'|'authenticated'|'recovery_pending';
+export type OwnerAuthPhase='anonymous'|'authenticated'|'recovery_pending';
 /** Safe browser projection. No identity, password, OTP or provider tokens. */
 export interface OwnerAuthState {
   readonly state:OwnerAuthPhase;
@@ -85,7 +88,7 @@ export interface OwnerAuthorization {
 }
 export interface OwnerAuthController {
   handle(request:Request):Promise<Response>;
-  /** Requires the sole owner + mandatory verified TOTP aal2. Unsafe methods
+  /** Requires the sole confirmed owner and managed password authentication. Unsafe methods
    * additionally require exact Origin and session-bound X-Hamdee-CSRF. */
   authorize(request:Request):Promise<OwnerAuthorization>;
 }
@@ -139,13 +142,14 @@ export function createManagedOwnerProvider(options:ManagedOwnerProviderOptions):
       claims.is_anonymous===false&&typeof claims.session_id==='string'&&uuid.test(claims.session_id)&&
       Number.isSafeInteger(claims.exp)&&claims.exp>n&&Number.isSafeInteger(claims.iat)&&claims.iat<=n&&claims.iat<claims.exp&&
       (claims.nbf===undefined||(Number.isSafeInteger(claims.nbf)&&claims.nbf<=n))&&['aal1','aal2'].includes(claims.aal),401,'UNAUTHENTICATED');
-    const factors=(user.factors??[]).filter(f=>f.factor_type==='totp').map(f=>({id:f.id,status:f.status}));
-    ownerRequire(factors.every(f=>uuid.test(f.id)&&['verified','unverified'].includes(f.status)),401,'UNAUTHENTICATED');
+    const factors=(user.factors??[]).filter(f=>f.factor_type==='totp'&&uuid.test(f.id)&&['verified','unverified'].includes(f.status)).map(f=>({id:f.id,status:f.status}));
     const amr=Array.isArray(claims.amr)?claims.amr:[];
+    const passwordTimes=amr.flatMap(a=>a&&typeof a==='object'&&a.method==='password'&&Number.isSafeInteger(a.timestamp)&&a.timestamp>=0&&a.timestamp<=n?[a.timestamp*1000]:[]);
+    ownerRequire(typeof user.email==='string'&&typeof user.email_confirmed_at==='string'&&milliseconds(Date.parse(user.email_confirmed_at))&&
+      Date.parse(user.email_confirmed_at)<=Date.now()&&claims.email===user.email&&passwordTimes.length>0,401,'UNAUTHENTICATED');
     const times=amr.flatMap(a=>a&&typeof a==='object'&&['totp','mfa/totp'].includes(a.method)&&Number.isSafeInteger(a.timestamp)&&a.timestamp>=0&&a.timestamp<=n?[a.timestamp*1000]:[]);
     const mfaVerifiedAt=claims.aal==='aal2'&&times.length?Math.max(...times):null;
-    ownerRequire(claims.aal!=='aal2'||(mfaVerifiedAt!==null&&factors.some(f=>f.status==='verified')),403,'MFA_REQUIRED');
-    return detached({identity:{issuer,subject:user.id},sessionId:claims.session_id,assurance:claims.aal as 'aal1'|'aal2',expiresAt:claims.exp*1000,mfaVerifiedAt,
+    return detached({identity:{issuer,subject:user.id},email:user.email,emailConfirmed:true,passwordAuthenticatedAt:Math.max(...passwordTimes),sessionId:claims.session_id,assurance:claims.aal as 'aal1'|'aal2',expiresAt:claims.exp*1000,mfaVerifiedAt,
       factors:factors as OwnerTotpFactor[],tokens});
   }
   async function refresh(c:SupabaseClient,tokens:OwnerTokenPair):Promise<OwnerProviderSession> {
@@ -179,6 +183,7 @@ export function createManagedOwnerProvider(options:ManagedOwnerProviderOptions):
 }
 interface OwnerCookie {
   readonly tokens:OwnerTokenPair;readonly sessionId:string;readonly createdAt:number;readonly lastActivityAt:number;
+  readonly passwordAuthenticatedAt:number;
   readonly assurance:'aal1'|'aal2';readonly mfaVerifiedAt:number|null;readonly csrfSeed:string;
 }
 /** Thin sealed-cookie transport around managed sessions. There is no durable
@@ -186,9 +191,10 @@ interface OwnerCookie {
 export function createOwnerAuth(options:OwnerAuthOptions):OwnerAuthController {
   const p=detached(options.policy);
   ownerRequire(p&&Object.keys(p).length===8&&p.owner&&Object.keys(p.owner).length===2&&uuid.test(p.owner.subject)&&/^[a-z]{20}$/.test(p.projectRef)&&
+    typeof p.ownerEmail==='string'&&p.ownerEmail===p.ownerEmail.trim().toLowerCase()&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p.ownerEmail)&&
     p.owner.issuer===`https://${p.projectRef}.supabase.co/auth/v1`&&typeof p.cookieSecure==='boolean'&&
-    [p.idleTimeoutMs,p.absoluteTimeoutMs,p.csrfLifetimeMs,p.mfaMaxAgeMs].every(v=>milliseconds(v)&&v>0)&&
-    p.idleTimeoutMs<=p.absoluteTimeoutMs&&p.csrfLifetimeMs<=p.absoluteTimeoutMs&&p.mfaMaxAgeMs<=p.absoluteTimeoutMs,503,'CONFIGURATION_UNAVAILABLE');
+    [p.idleTimeoutMs,p.absoluteTimeoutMs,p.csrfLifetimeMs].every(v=>milliseconds(v)&&v>0)&&
+    p.idleTimeoutMs<=p.absoluteTimeoutMs&&p.csrfLifetimeMs<=p.absoluteTimeoutMs,503,'CONFIGURATION_UNAVAILABLE');
   let origin:URL;try{origin=new URL(p.origin);}catch{throw ownerError(503,'CONFIGURATION_UNAVAILABLE');}
   ownerRequire(origin.origin===p.origin&&!origin.username&&!origin.password&&
     (p.cookieSecure?origin.protocol==='https:':origin.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(origin.hostname)),503,'CONFIGURATION_UNAVAILABLE');
@@ -197,7 +203,7 @@ export function createOwnerAuth(options:OwnerAuthOptions):OwnerAuthController {
     typeof options.limiter?.consume==='function'&&typeof options.audit?.append==='function',503,'CONFIGURATION_UNAVAILABLE');
   const secret=Buffer.from(options.cookieKey),encryptionKey=createHmac('sha256',secret).update('hamdee/owner/encryption/v1').digest(),
     csrfKey=createHmac('sha256',secret).update('hamdee/owner/csrf/v1').digest();secret.fill(0);
-  const aad=Buffer.from(JSON.stringify(['hamdee/owner/v1',p.projectRef,p.owner.issuer,p.owner.subject,p.origin]));
+  const aad=Buffer.from(JSON.stringify(['hamdee/owner/password/v2',p.projectRef,p.owner.issuer,p.owner.subject,p.ownerEmail,p.origin]));
   const clock=options.clock,random=options.randomBytes,consume=options.limiter.consume.bind(options.limiter),append=options.audit.append.bind(options.audit);
   const provider:OwnerManagedProvider={signIn:options.provider.signIn.bind(options.provider),verifySession:options.provider.verifySession.bind(options.provider),
     enrollTotp:options.provider.enrollTotp.bind(options.provider),verifyTotp:options.provider.verifyTotp.bind(options.provider),signOut:options.provider.signOut.bind(options.provider)};
@@ -229,9 +235,10 @@ export function createOwnerAuth(options:OwnerAuthOptions):OwnerAuthController {
       const decipher=createDecipheriv('aes-256-gcm',encryptionKey,nonce);decipher.setAAD(aad);decipher.setAuthTag(tag);
       plaintext=Buffer.concat([decipher.update(encrypted),decipher.final()]);const text=plaintext.toString('utf8');
       ownerRequire(Buffer.from(text).equals(plaintext),401,'UNAUTHENTICATED');const value=JSON.parse(text) as OwnerCookie,n=now();
-      ownerRequire(value&&Object.keys(value).length===7&&uuid.test(value.sessionId)&&milliseconds(value.createdAt)&&milliseconds(value.lastActivityAt)&&
+      ownerRequire(value&&Object.keys(value).length===8&&uuid.test(value.sessionId)&&milliseconds(value.createdAt)&&milliseconds(value.lastActivityAt)&&
         value.createdAt<=value.lastActivityAt&&value.lastActivityAt<=n&&Number.isSafeInteger(value.createdAt+p.absoluteTimeoutMs)&&
-        ['aal1','aal2'].includes(value.assurance)&&((value.assurance==='aal1'&&value.mfaVerifiedAt===null)||(value.assurance==='aal2'&&milliseconds(value.mfaVerifiedAt)&&value.mfaVerifiedAt<=n))&&
+        milliseconds(value.passwordAuthenticatedAt)&&value.passwordAuthenticatedAt<=value.createdAt&&
+        ['aal1','aal2'].includes(value.assurance)&&(value.mfaVerifiedAt===null||(milliseconds(value.mfaVerifiedAt)&&value.mfaVerifiedAt<=n))&&
         typeof value.csrfSeed==='string'&&decode(value.csrfSeed,43).length===32,401,'UNAUTHENTICATED');
       const r=detached({...value,tokens:pair(value.tokens)});if(!expiredAllowed)liveDeadline(r);return r;
     }catch(error){if(error instanceof ApiError&&error.status===503)throw error;throw ownerError(401,'UNAUTHENTICATED');}
@@ -278,33 +285,34 @@ export function createOwnerAuth(options:OwnerAuthOptions):OwnerAuthController {
     try{await append(detached({event:name,outcome,requestId}));}catch{throw ownerError(503,'AUTH_UNAVAILABLE');}
   }
   async function call<T>(work:()=>Promise<T>):Promise<T> {try{return detached(await work());}catch(error){return providerError(error);}}
-  function session(raw:OwnerProviderSession,previous?:OwnerCookie,allowElevation=false):OwnerProviderSession {
+  function session(raw:OwnerProviderSession,previous?:OwnerCookie):OwnerProviderSession {
     const r=detached(raw),n=now();
     ownerRequire(r&&r.identity&&r.identity.issuer===p.owner.issuer&&r.identity.subject===p.owner.subject,403,'OWNER_ACCESS_DENIED');
+    ownerRequire(typeof r.email==='string'&&r.email.toLowerCase()===p.ownerEmail&&r.emailConfirmed===true&&
+      milliseconds(r.passwordAuthenticatedAt)&&r.passwordAuthenticatedAt<=n,403,'OWNER_ACCESS_DENIED');
     ownerRequire(uuid.test(r.sessionId)&&milliseconds(r.expiresAt)&&r.expiresAt>n&&['aal1','aal2'].includes(r.assurance)&&Array.isArray(r.factors)&&
       r.factors.every(f=>uuid.test(f.id)&&['verified','unverified'].includes(f.status))&&new Set(r.factors.map(f=>f.id)).size===r.factors.length&&
-      ((r.assurance==='aal1'&&r.mfaVerifiedAt===null)||(r.assurance==='aal2'&&milliseconds(r.mfaVerifiedAt)&&r.mfaVerifiedAt<=n)),401,'UNAUTHENTICATED');
+      (r.mfaVerifiedAt===null||(milliseconds(r.mfaVerifiedAt)&&r.mfaVerifiedAt<=n)),401,'UNAUTHENTICATED');
     pair(r.tokens);
     if(previous){
       liveDeadline(previous);ownerRequire(r.sessionId===previous.sessionId,401,'UNAUTHENTICATED');
-      if(!allowElevation)ownerRequire(r.assurance===previous.assurance&&r.mfaVerifiedAt===previous.mfaVerifiedAt,401,'UNAUTHENTICATED');
+      ownerRequire(r.passwordAuthenticatedAt===previous.passwordAuthenticatedAt,401,'UNAUTHENTICATED');
     }
-    return detached({identity:{...p.owner},sessionId:r.sessionId,assurance:r.assurance,expiresAt:r.expiresAt,mfaVerifiedAt:r.mfaVerifiedAt,
+    return detached({identity:{...p.owner},email:r.email,emailConfirmed:true,passwordAuthenticatedAt:r.passwordAuthenticatedAt,sessionId:r.sessionId,assurance:r.assurance,expiresAt:r.expiresAt,mfaVerifiedAt:r.mfaVerifiedAt,
       factors:r.factors.map(f=>({id:f.id,status:f.status})),tokens:pair(r.tokens)});
   }
   async function read(req:Request):Promise<{record:OwnerCookie;verified:OwnerProviderSession}> {
     const record=open(req);await limited('refresh');const verified=session(await call(()=>provider.verifySession(record.tokens)),record);
     liveDeadline(record);return {record:detached({...record,tokens:verified.tokens}),verified};
   }
-  const hasMfa=(s:OwnerProviderSession)=>s.assurance==='aal2'&&s.mfaVerifiedAt!==null&&now()-s.mfaVerifiedAt<p.mfaMaxAgeMs&&s.factors.some(f=>f.status==='verified');
   function transport(req:Request,record:OwnerCookie|null,s:OwnerProviderSession|null,phase?:OwnerAuthPhase):{state:OwnerAuthState;setCookies:readonly string[]} {
     if(record)liveDeadline(record);
     const old=cookies(req).get('hamdee_csrf'),csrfToken=old&&validCsrf(old,record)?old:makeCsrf(record),lines:string[]=[];
     if(record)lines.push(cookie('hamdee_owner',seal(record),(record.createdAt+p.absoluteTimeoutMs-now())/1000));
     lines.push(cookie('hamdee_csrf',csrfToken,p.csrfLifetimeMs/1000));
-    return {state:detached({state:phase??(s?(hasMfa(s)?'authenticated':'mfa_required'):'anonymous'),csrfToken,
-      expiresAt:record?Math.min(record.createdAt+p.absoluteTimeoutMs,record.lastActivityAt+p.idleTimeoutMs,...(s&&hasMfa(s)?[s.mfaVerifiedAt!+p.mfaMaxAgeMs]:[])):null,
-      factors:s?s.factors.filter(f=>f.status==='verified'):[]}),setCookies:lines};
+    return {state:detached({state:phase??(s?'authenticated':'anonymous'),csrfToken,
+      expiresAt:record?Math.min(record.createdAt+p.absoluteTimeoutMs,record.lastActivityAt+p.idleTimeoutMs):null,
+      factors:[]}),setCookies:lines};
   }
   async function finish(req:Request,r:OwnerCookie,s:OwnerProviderSession):Promise<{state:OwnerAuthState;setCookies:readonly string[]}> {
     const latest=session(await call(()=>provider.verifySession(s.tokens)),r);
@@ -329,7 +337,7 @@ export function createOwnerAuth(options:OwnerAuthOptions):OwnerAuthController {
       try{
         const req=request.clone();requestOrigin(req);ownerRequire(!req.headers.has('authorization'),401,'UNAUTHENTICATED');
         const existing=open(req);if(!['GET','HEAD','OPTIONS'].includes(req.method)){mutation(req,existing);await limited('write');}
-        const {record,verified}=await read(req);ownerRequire(hasMfa(verified),403,'MFA_REQUIRED');
+        const {record,verified}=await read(req);
         // Only business authorization advances idle; auth-state/refresh never do.
         const next=detached({...record,lastActivityAt:now()}),out=transport(req,next,verified);
         return detached({identity:{...p.owner},sessionId:verified.sessionId,...out});
@@ -341,7 +349,7 @@ export function createOwnerAuth(options:OwnerAuthOptions):OwnerAuthController {
         const req=request.clone();requestOrigin(req);ownerRequire(!req.headers.has('authorization'),401,'UNAUTHENTICATED');
         const url=new URL(req.url);ownerRequire(!url.search&&url.pathname.startsWith('/api/hamdee/auth/'),404,'NOT_FOUND');
         const action=url.pathname.slice('/api/hamdee/auth/'.length);
-        ownerRequire(['state','login','mfa/enroll','mfa/verify','refresh','logout','recovery'].includes(action),404,'NOT_FOUND');
+        ownerRequire(['state','login','refresh','logout','recovery'].includes(action),404,'NOT_FOUND');
         ownerRequire(req.method===(action==='state'?'GET':'POST'),405,'METHOD_NOT_ALLOWED');
         if(action==='state'){
           if(!cookies(req).has('hamdee_owner')){const out=transport(req,null,null);return json(requestId,{data:out.state},200,out.setCookies);}
@@ -352,8 +360,9 @@ export function createOwnerAuth(options:OwnerAuthOptions):OwnerAuthController {
         const present=cookies(req).has('hamdee_owner')?open(req,action==='logout'||action==='recovery'):null;mutation(req,present);
         if(action==='login'){
           await limited('login');const b=await body(req,['email','password']);ownerRequire(email(b.email)&&typeof b.password==='string'&&b.password.length>0&&b.password.length<=1024,422,'VALIDATION_FAILED');
+          ownerRequire((b.email as string).toLowerCase()===p.ownerEmail,401,'UNAUTHENTICATED');
           const s=session(await call(()=>provider.signIn(b.email as string,b.password as string))),n=now();
-          const r:OwnerCookie=detached({tokens:s.tokens,sessionId:s.sessionId,createdAt:n,lastActivityAt:n,assurance:s.assurance,mfaVerifiedAt:s.mfaVerifiedAt,csrfSeed:bytes(32).toString('base64url')});
+          const r:OwnerCookie=detached({tokens:s.tokens,sessionId:s.sessionId,createdAt:n,lastActivityAt:n,passwordAuthenticatedAt:s.passwordAuthenticatedAt,assurance:s.assurance,mfaVerifiedAt:s.mfaVerifiedAt,csrfSeed:bytes(32).toString('base64url')});
           await event('login',requestId);const out=await finish(req,r,s);return json(requestId,{data:out.state},200,out.setCookies);
         }
         if(action==='logout'||action==='recovery'){
@@ -367,23 +376,9 @@ export function createOwnerAuth(options:OwnerAuthOptions):OwnerAuthController {
           const out=transport(new Request(req.url),null,null,action==='recovery'?'recovery_pending':'anonymous');
           return json(requestId,{data:out.state},action==='recovery'?202:200,[...clear(),...out.setCookies]);
         }
-        ownerRequire(present,401,'UNAUTHENTICATED');await limited(action==='refresh'?'refresh':'mfa');
-        const b=await body(req,action==='mfa/verify'?['factorId','code']:[]),{record,verified}=await read(req);
-        if(action==='refresh'){const out=transport(req,record,verified);return json(requestId,{data:out.state},200,out.setCookies);}
-        if(action==='mfa/enroll'){
-          ownerRequire(!verified.factors.some(f=>f.status==='verified')&&record.assurance==='aal1',409,'FACTOR_ALREADY_ENROLLED');
-          const enrolled=await call(()=>provider.enrollTotp(verified.tokens)),s=session(enrolled.session,record);
-          ownerRequire(uuid.test(enrolled.factorId)&&typeof enrolled.qrCode==='string'&&enrolled.qrCode.length<=65536,503,'AUTH_UNAVAILABLE');
-          let svg=enrolled.qrCode;if(svg.startsWith('data:image/svg+xml;utf-8,'))svg=svg.slice('data:image/svg+xml;utf-8,'.length);
-          ownerRequire(/^\s*<svg[\s/>]/.test(svg),503,'AUTH_UNAVAILABLE');
-          await event('mfa_enrollment',requestId);const out=await finish(req,{...record,tokens:s.tokens},s);
-          return json(requestId,{data:{...out.state,enrollment:{factorId:enrolled.factorId,qrCodeDataUrl:'data:image/svg+xml;base64,'+Buffer.from(svg).toString('base64')}}},200,out.setCookies);
-        }
-        ownerRequire(typeof b.factorId==='string'&&uuid.test(b.factorId)&&typeof b.code==='string'&&/^\d{6}$/.test(b.code),422,'VALIDATION_FAILED');
-        const s=session(await call(()=>provider.verifyTotp(verified.tokens,b.factorId as string,b.code as string)),record,true);
-        ownerRequire(hasMfa(s)&&s.factors.some(f=>f.id===b.factorId&&f.status==='verified')&&(record.mfaVerifiedAt===null||s.mfaVerifiedAt!>record.mfaVerifiedAt),403,'MFA_REQUIRED');
-        const next=detached({...record,tokens:s.tokens,assurance:s.assurance,mfaVerifiedAt:s.mfaVerifiedAt,csrfSeed:bytes(32).toString('base64url')});
-        await event('mfa_verified',requestId);const out=await finish(req,next,s);return json(requestId,{data:out.state},200,out.setCookies);
+        ownerRequire(present,401,'UNAUTHENTICATED');await limited('refresh');
+        await body(req,[]);const {record,verified}=await read(req),out=transport(req,record,verified);
+        return json(requestId,{data:out.state},200,out.setCookies);
       }catch(error){
         let safe=error instanceof ApiError&&ownerMessages[error.code]?ownerError(error.status,error.code):ownerError(503,'AUTH_UNAVAILABLE');
         try{await event('denied',requestId,'denied');}catch{safe=ownerError(503,'AUTH_UNAVAILABLE');}

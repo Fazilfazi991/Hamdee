@@ -11,9 +11,6 @@ async function login(page: Page) {
   await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email);
   await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await page.getByRole('button', { name: 'Set up authenticator', exact: true }).click();
-  await page.getByLabel('Verification code', { exact: true }).fill(server.fixture.inputs.validTotp);
-  await page.getByRole('button', { name: 'Verify code', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
 }
 async function nav(page: Page, name: string) {

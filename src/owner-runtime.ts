@@ -81,6 +81,8 @@ function configuredApplication():OwnerApplication|null {
       !!e.HAMDEE_PROJECT_OWNER?.trim()&&e.HAMDEE_PROJECT_REF==='dytlzfwbgeuhzgzemqsf'&&
       e.HAMDEE_SUPABASE_URL===`https://${e.HAMDEE_PROJECT_REF}.supabase.co`&&e.HAMDEE_AUTH_ISSUER===e.HAMDEE_SUPABASE_URL+'/auth/v1'&&
       e.HAMDEE_AUTH_AUDIENCE==='authenticated'&&!!e.HAMDEE_OWNER_SUBJECT&&uuid.test(e.HAMDEE_OWNER_SUBJECT)&&
+      !!e.HAMDEE_OWNER_EMAIL&&e.HAMDEE_OWNER_EMAIL===e.HAMDEE_OWNER_EMAIL.trim().toLowerCase()&&
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.HAMDEE_OWNER_EMAIL)&&
       !!e.HAMDEE_DATABASE_URL&&!!e.HAMDEE_OWNER_ORIGIN?.startsWith('https://')&&
       !!e.HAMDEE_OWNER_COOKIE_KEY&&/^[A-Za-z0-9_-]{43}$/.test(e.HAMDEE_OWNER_COOKIE_KEY),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
     const number=(key:string)=>{const text=e[key];requireThat(!!text&&/^[1-9]\d*$/.test(text),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
@@ -88,11 +90,13 @@ function configuredApplication():OwnerApplication|null {
     const cookieKey=Buffer.from(e.HAMDEE_OWNER_COOKIE_KEY,'base64url');requireThat(cookieKey.length===32&&cookieKey.toString('base64url')===e.HAMDEE_OWNER_COOKIE_KEY,503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
     const window=number('HAMDEE_OWNER_RATE_WINDOW_MS'),bounds=number('HAMDEE_OWNER_RATE_BOUNDS'),backoff=number('HAMDEE_OWNER_RATE_BACKOFF_MS');
     const timeout=number('HAMDEE_OWNER_AUTH_TIMEOUT_MS');
+    const idleTimeoutMs=number('HAMDEE_OWNER_IDLE_MS'),absoluteTimeoutMs=number('HAMDEE_OWNER_ABSOLUTE_MS');
+    requireThat(idleTimeoutMs===15*60*1000&&absoluteTimeoutMs===8*60*60*1000,503,'CONFIGURATION_UNAVAILABLE','The approved owner session policy is required.');
     requireThat(timeout<=5000&&Number.isSafeInteger(Date.now()+window)&&Number.isSafeInteger(Date.now()+backoff),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
     const buckets=new Map<OwnerAuthFlow,{count:number;reset:number;blocked:number}>();
-    const app=createOwnerApplication({policy:{owner:{issuer:e.HAMDEE_AUTH_ISSUER,subject:e.HAMDEE_OWNER_SUBJECT},projectRef:e.HAMDEE_PROJECT_REF,
-      origin:e.HAMDEE_OWNER_ORIGIN!,cookieSecure:true,idleTimeoutMs:number('HAMDEE_OWNER_IDLE_MS'),absoluteTimeoutMs:number('HAMDEE_OWNER_ABSOLUTE_MS'),
-      csrfLifetimeMs:number('HAMDEE_OWNER_CSRF_MS'),mfaMaxAgeMs:number('HAMDEE_OWNER_MFA_MAX_AGE_MS')},
+    const app=createOwnerApplication({policy:{owner:{issuer:e.HAMDEE_AUTH_ISSUER,subject:e.HAMDEE_OWNER_SUBJECT},ownerEmail:e.HAMDEE_OWNER_EMAIL!,projectRef:e.HAMDEE_PROJECT_REF,
+      origin:e.HAMDEE_OWNER_ORIGIN!,cookieSecure:true,idleTimeoutMs,absoluteTimeoutMs,
+      csrfLifetimeMs:number('HAMDEE_OWNER_CSRF_MS')},
       cookieKey,clock:()=>Date.now(),randomBytes,
       provider:createManagedOwnerProvider({supabaseUrl:e.HAMDEE_SUPABASE_URL,publishableKey:e.HAMDEE_SUPABASE_PUBLISHABLE_KEY??'',requestTimeoutMs:timeout}),
       database:hosted?new HostedPostgresDatabase(e.HAMDEE_DATABASE_URL,reviewedHostedDatabasePins,e.HAMDEE_DATABASE_CA_PEM):new LocalPostgresDatabase(e.HAMDEE_DATABASE_URL),

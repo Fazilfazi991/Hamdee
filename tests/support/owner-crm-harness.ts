@@ -61,11 +61,11 @@ interface OwnerQaScenario {
 }
 // Inventory only. These descriptions are not executed assertions/test passes.
 export const ownerQaScenarios: readonly OwnerQaScenario[] = [
-  { id: 'O01', area: 'access', arrangement: 'Synthetic owner email/password, then managed-factor fake challenge/verification', assertion: 'Only immutable configured subject + issuer + verified MFA reaches protected session/property/dashboard' },
+  { id: 'O01', area: 'access', arrangement: 'Synthetic managed owner email/password with confirmed mailbox', assertion: 'Only confirmed configured mailbox + immutable subject + issuer + password-primary session reaches protected records' },
   { id: 'O02', area: 'access', arrangement: 'Missing, malformed, expired, wrong-project, anonymous and nonowner managed identity', assertion: 'Deny direct API access; client owner claims never substitute for configured identity' },
-  { id: 'O03', area: 'access', arrangement: 'Owner with aal1, wrong OTP, stale/mismatched factor/session or provider outage', assertion: 'No protected data or property mutation before current verified MFA' },
+  { id: 'O03', area: 'access', arrangement: 'Wrong or unconfirmed mailbox, missing password proof, wrong session or provider outage', assertion: 'No protected data or property mutation without current verified owner password identity' },
   { id: 'O04', area: 'access', arrangement: 'Absent/wrong/cross-session/origin CSRF proof for unsafe auth/property operations', assertion: 'Fail closed with no protected mutation; valid proof works and command retry stays idempotent' },
-  { id: 'O05', area: 'access', arrangement: 'Copied stale access after logout, token/idle/absolute deadlines, delayed refresh or MFA response', assertion: 'No session resurrection or unauthorized data; explicit expiry/activity semantics from frozen contract' },
+  { id: 'O05', area: 'access', arrangement: 'Copied stale access after logout, token/idle/absolute deadlines, delayed refresh response', assertion: 'No session resurrection or unauthorized data; explicit expiry/activity semantics from frozen contract' },
   { id: 'O06', area: 'access', arrangement: 'Recovery request, unknown account, unavailable provider or abandoned recovery flow', assertion: 'Safe generic responses; preparation fails closed; no real messages or invented recovery completion' },
   { id: 'O07', area: 'access', arrangement: 'Spoofed client role/subject headers, runtime/test-auth environment values', assertion: 'Test injection remains test-owned; normal configuration cannot create an owner session' },
   { id: 'O08', area: 'persistence', arrangement: 'Owner creates/edits/archives/restores property and reads audit', assertion: 'Stable UUID/creation identity, revisions, attributable history and authoritative saved-record counts' },
@@ -74,10 +74,10 @@ export const ownerQaScenarios: readonly OwnerQaScenario[] = [
   { id: 'O11', area: 'native', arrangement: 'Two independent PostgreSQL connections race identical commands and stale edits', assertion: 'Distinct backend PIDs; one command effect/replay and one optimistic edit winner; audit/history reconcile' },
   { id: 'O12', area: 'native', arrangement: 'Create/update/archive/restore; close application pools, stop/restart owned PostgreSQL, restart app and sign in anew', assertion: 'Properties/history and saved-record dashboard counts survive BOTH engine and app restart' },
   { id: 'O13', area: 'native', arrangement: 'Actual nonowner runtime, connection failure and actor-context reuse', assertion: 'No elevated SQL/RLS bypass, actor/GUC leakage or partial writes; only owned instance touched' },
-  { id: 'O14', area: 'browser', arrangement: 'Desktop 1440x1000 and mobile 390x844 owner login/MFA through dashboard/property operations', assertion: 'Real workspace UI with fake provider only in harness; saved totals reconcile; no fabricated financial KPIs' },
-  { id: 'O15', area: 'browser', arrangement: 'Keyboard login/MFA/property form, invalid input, Escape/focus return and mobile navigation', assertion: 'Usable labels/errors/focus; no page overflow; HAMDEE branding preserved' },
+  { id: 'O14', area: 'browser', arrangement: 'Desktop 1440x1000 and mobile 390x844 owner password login through dashboard/property operations', assertion: 'Real workspace UI with fake provider only in harness; saved totals reconcile; no fabricated financial KPIs' },
+  { id: 'O15', area: 'browser', arrangement: 'Keyboard password login/property form, invalid input, Escape/focus return and mobile navigation', assertion: 'Usable labels/errors/focus; no page overflow; HAMDEE branding preserved' },
   { id: 'O16', area: 'browser', arrangement: 'Committed response dropped; retry same command, stale edit and review latest revision', assertion: 'One saved record, actionable conflict, no silent mutation resend or false success' },
-  { id: 'O17', area: 'browser', arrangement: 'Delay save/MFA/refresh response across logout/session loss; reload and new browser session', assertion: 'Protected content/drafts clear; late response cannot repopulate authenticated state' },
+  { id: 'O17', area: 'browser', arrangement: 'Delay save/refresh response across logout/session loss; reload and new browser session', assertion: 'Protected content/drafts clear; late response cannot repopulate authenticated state' },
   { id: 'O18', area: 'browser', arrangement: 'Browser or database unavailable, empty register, demo localStorage sentinel and script-like names', assertion: 'Safe errors/empty states; no fallback seed, money totals, unsafe rendering or provider-token leakage' }
 ];
 
@@ -253,7 +253,7 @@ export function ownerProviderFake(clock: ReturnType<typeof ownerQaClock>) {
   const inputs = ownerQaInputs();
   const sessions = new Map<string, OwnerProviderSession>(), revoked = new Set<string>();
   const facts = { unavailable: false, unconfirmedLogout: false, loginAal2: false, subject: OWNER_QA_SUBJECT,
-    wrongIssuer: false, factorActive: true, verifyGate: null as { entered: OwnerQaGate; release: OwnerQaGate } | null,
+    email: inputs.email, emailConfirmed: true, passwordAuthenticatedAt: clock.now(), wrongIssuer: false, factorActive: true, verifyGate: null as { entered: OwnerQaGate; release: OwnerQaGate } | null,
     mfaGate: null as { entered: OwnerQaGate; release: OwnerQaGate } | null,
     calls: { signIn: 0, verify: 0, enroll: 0, mfa: 0, signOut: 0 }, enrolled: false, accountFactorVerified: false };
   let serial = 0;
@@ -266,7 +266,7 @@ export function ownerProviderFake(clock: ReturnType<typeof ownerQaClock>) {
     if (facts.unavailable) throw new ApiError(503, 'AUTH_UNAVAILABLE', 'Synthetic provider unavailable.');
     const session = sessions.get(tokens.refreshToken);
     if (!session || revoked.has(session.sessionId)) throw new ApiError(401, 'UNAUTHENTICATED', 'Synthetic managed session revoked.');
-    return { ...structuredClone(session), factors: !facts.factorActive ? [] : facts.accountFactorVerified || facts.loginAal2 ?
+    return { ...structuredClone(session), email: facts.email, emailConfirmed: facts.emailConfirmed, passwordAuthenticatedAt: facts.passwordAuthenticatedAt, factors: !facts.factorActive ? [] : facts.accountFactorVerified || facts.loginAal2 ?
       [{ id: OWNER_QA_FACTOR, status: 'verified' }] : facts.enrolled ? [{ id: OWNER_QA_FACTOR, status: 'unverified' }] : [] };
   };
   const provider: OwnerManagedProvider = {
@@ -276,7 +276,7 @@ export function ownerProviderFake(clock: ReturnType<typeof ownerQaClock>) {
       if (email !== inputs.email || password !== inputs.password) throw new ApiError(401, 'UNAUTHENTICATED', 'Synthetic invalid credentials.');
       const session: OwnerProviderSession = {
         identity: { issuer: facts.wrongIssuer ? 'https://other.invalid/auth/v1' : inputs.issuer, subject: facts.subject },
-        sessionId: randomUUID(), assurance: facts.loginAal2 ? 'aal2' : 'aal1', expiresAt: clock.now() + inputs.tokenMilliseconds,
+        email: facts.email, emailConfirmed: facts.emailConfirmed, passwordAuthenticatedAt: facts.passwordAuthenticatedAt, sessionId: randomUUID(), assurance: facts.loginAal2 ? 'aal2' : 'aal1', expiresAt: clock.now() + inputs.tokenMilliseconds,
         mfaVerifiedAt: facts.loginAal2 ? clock.now() : null,
         factors: facts.loginAal2 || facts.accountFactorVerified ? [{ id: OWNER_QA_FACTOR, status: 'verified' }] : facts.enrolled ? [{ id: OWNER_QA_FACTOR, status: 'unverified' }] : [],
         tokens: { accessToken: 'SYNTHETIC_INITIAL_ACCESS', refreshToken: 'SYNTHETIC_INITIAL_REFRESH' }
@@ -336,7 +336,7 @@ export async function seedOwnerAppRecords(sql: { query: (text: string, values?: 
 export async function createOwnerQaFixture(config: { origin?: string; database?: Database; pg?: PGlite;
   databaseEnvironment?:'local-test'|'synthetic-development';
   provider?: ReturnType<typeof ownerProviderFake>; clock?: ReturnType<typeof ownerQaClock>;
-  timings?: Pick<OwnerAuthOptions['policy'], 'idleTimeoutMs' | 'absoluteTimeoutMs' | 'csrfLifetimeMs' | 'mfaMaxAgeMs'> } = {}) {
+  timings?: Pick<OwnerAuthOptions['policy'], 'idleTimeoutMs' | 'absoluteTimeoutMs' | 'csrfLifetimeMs'> } = {}) {
   const inputs = ownerQaInputs(), clock = config.clock || ownerQaClock(inputs.time), fake = config.provider || ownerProviderFake(clock);
   const pg = config.database ? config.pg : config.pg || new PGlite();
   let member: { id: string; assignment: string } | undefined;
@@ -347,10 +347,10 @@ export async function createOwnerQaFixture(config: { origin?: string; database?:
   const audit: OwnerAuthAuditEvent[] = [];
   const hooks = { auditAvailable: true, limiterAvailable: true, rateLimited: false, databaseAvailable: true };
   const options: OwnerAuthOptions = {
-    policy: { owner: { issuer: inputs.issuer, subject: inputs.ownerSubject }, projectRef: inputs.projectRef,
+    policy: { owner: { issuer: inputs.issuer, subject: inputs.ownerSubject }, ownerEmail: inputs.email, projectRef: inputs.projectRef,
       origin: config.origin || 'http://127.0.0.1:4189', cookieSecure: false,
       idleTimeoutMs: inputs.idleMilliseconds, absoluteTimeoutMs: inputs.absoluteMilliseconds,
-      csrfLifetimeMs: 10_000, mfaMaxAgeMs: 60_000, ...config.timings },
+      csrfLifetimeMs: 10_000, ...config.timings },
     provider: fake.provider, cookieKey: new Uint8Array(32).fill(62), clock: clock.now, randomBytes,
     limiter: { async consume() { if (!hooks.limiterAvailable) throw new Error('SYNTHETIC_LIMITER_FAILURE'); return !hooks.rateLimited; } },
     audit: { async append(event) { if (!hooks.auditAvailable) throw new Error('SYNTHETIC_AUDIT_FAILURE'); audit.push(structuredClone(event)); } }
@@ -366,17 +366,11 @@ export async function createOwnerQaFixture(config: { origin?: string; database?:
     await cookies.accept(response); return response;
   };
   const auth = (method: string, action: string, body?: unknown, extra?: Record<string, string>, cookies?: OwnerCookieJar) => request(method, '/api/hamdee/auth/' + action, body, extra, cookies);
-  const login = async (mfa = true) => {
+  const login = async (_legacyMfa = true) => {
+    void _legacyMfa; // Historical callers remain source-compatible; password login is sufficient.
     const state = await auth('GET', 'state'); assert.equal(state.status, 200, 'Owner auth state must be implemented');
     const response = await auth('POST', 'login', { email: inputs.email, password: inputs.password }); assert.equal(response.status, 200, 'Owner login must be implemented');
-    if (mfa && (await response.clone().json()).data.state === 'mfa_required') {
-      let factorId = (await response.clone().json()).data.factors.find((factor: { id: string; status: string }) => factor.status === 'verified')?.id;
-      if (!factorId) {
-        const enrolled = await auth('POST', 'mfa/enroll', {}); assert.equal(enrolled.status, 200);
-        factorId = (await enrolled.clone().json()).data.enrollment.factorId;
-      }
-      const verified = await auth('POST', 'mfa/verify', { factorId, code: inputs.validTotp }); assert.equal(verified.status, 200);
-    }
+    assert.equal((await response.clone().json()).data.state, 'authenticated');
     return jar;
   };
   return { inputs, options, fake, clock, jar, audit, hooks, pg, member, database, request, auth, login,
@@ -390,7 +384,7 @@ export async function startOwnerBrowserHarness() {
     let offset = 0;
     const clock = { now: () => Date.now() + offset, advance: (milliseconds: number) => { assert.ok(Number.isSafeInteger(milliseconds) && milliseconds >= 0); offset += milliseconds; } };
     fixture = await createOwnerQaFixture({ origin, clock,
-      timings: { idleTimeoutMs: 120_000, absoluteTimeoutMs: 600_000, csrfLifetimeMs: 60_000, mfaMaxAgeMs: 300_000 } });
+      timings: { idleTimeoutMs: 120_000, absoluteTimeoutMs: 600_000, csrfLifetimeMs: 60_000 } });
     return request => new URL(request.url).pathname.startsWith('/api/hamdee/auth/') ? fixture.app().handleAuth(request) : fixture.app().handleProperties(request);
   });
   return { ...server, fixture, close: async () => { await server.close(); await fixture.close(); } };
@@ -437,8 +431,6 @@ export async function verifyOwnerRestartWitness(connection: string, witness: { i
   try {
     await request('GET', '/api/hamdee/auth/state');
     await request('POST', '/api/hamdee/auth/login', { email: inputs.email, password: inputs.password });
-    await request('POST', '/api/hamdee/auth/mfa/enroll', {});
-    await request('POST', '/api/hamdee/auth/mfa/verify', { factorId: OWNER_QA_FACTOR, code: inputs.validTotp });
     const property = (await request('GET', '/api/hamdee/v1/properties/' + witness.id)).data;
     assert.equal(property.id, witness.id); assert.equal(property.version, witness.version); assert.equal(property.createdAt, witness.createdAt);
     assert.equal(property.name, witness.name); assert.equal(property.lifecycleStatus, 'registered');

@@ -5,7 +5,7 @@ const api=new PropertyApi(),$=s=>document.querySelector(s),icon=window.icon;
 const e=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let session=null,current=null,formContext=null,pending=null,trigger=null,routeSequence=0,authGeneration=0;
 let filters={archiveState:'active',q:'',limit:'50',cursor:''},page=null;
-let managed=null,access=null,enrollment=null,recoveryView=false,readController=null,writeController=null,authController=null,expiryTimer=null;
+let managed=null,access=null,recoveryView=false,readController=null,writeController=null,authController=null,expiryTimer=null;
 // Retain HAMDEE's paper panels, brass actions, Inter and compact 4px rhythm.
 // Owner access has one primary action; property metadata keeps its existing hierarchy.
 const can=action=>session?.capabilities.includes(action);
@@ -15,10 +15,10 @@ const unavailable=(title,message)=>`<section class="panel foundation-unavailable
 const date=v=>v?new Date(v).toLocaleString('en-GB',{timeZone:'UTC'})+' UTC':'—';
 const nav=[['dashboard','Dashboard','dashboard'],['properties','Properties','properties'],['partners','Investment partners','partners'],['tenants','Tenants & agreements','tenants'],['collections','Collections','collections'],['cheques','Cheque desk','cheques'],['expenses','Expenses','expenses'],['maintenance','Maintenance','maintenance'],['vendors','Vendors','vendors'],['company','Company accounts','company'],['settlements','Partner settlements','settlements'],['reports','Reports','reports'],['settings','Settings','settings']];
 function invalidateForm(){writeController?.abort();writeController=null;formContext=null;pending=null;$('#dialog').close();$('#dialog-body').innerHTML='';$('#conflict-review').innerHTML='';$('#form-error').textContent='';$('#save-button').disabled=false;$('#property-form').removeAttribute('aria-busy');}
-function clearProtected(){resetExpenses();resetRental();authGeneration++;routeSequence++;readController?.abort();authController?.abort();window.clearTimeout(expiryTimer);session=null;current=null;page=null;access=null;enrollment=null;api.csrfToken=null;invalidateForm();$('#user-context').textContent='Not signed in';$('#logout-button').hidden=true;$('#recovery-button').hidden=true;document.querySelectorAll('#recovery-button,.topbar [data-action="refresh"]').forEach(button=>button.disabled=false);$('#feedback').textContent='';$('#mode-detail').textContent='Property and rental records · backend required';}
+function clearProtected(){resetExpenses();resetRental();authGeneration++;routeSequence++;readController?.abort();authController?.abort();window.clearTimeout(expiryTimer);session=null;current=null;page=null;access=null;api.csrfToken=null;invalidateForm();$('#user-context').textContent='Not signed in';$('#logout-button').hidden=true;$('#recovery-button').hidden=true;document.querySelectorAll('#recovery-button,.topbar [data-action="refresh"]').forEach(button=>button.disabled=false);$('#feedback').textContent='';$('#mode-detail').textContent='Property and rental records · backend required';}
 function beginRead(){readController?.abort();readController=new window.AbortController();routeSequence++;return readController;}
 const validRead=(seq,controller)=>seq===routeSequence&&!controller.signal.aborted;
-const accessLost=error=>error.status===401||['MFA_REQUIRED','OWNER_ACCESS_DENIED'].includes(error.code);
+const accessLost=error=>error.status===401||error.code==='OWNER_ACCESS_DENIED';
 function showUnavailable(title,message){$('#main').innerHTML=unavailable(title,message);$('#main').setAttribute('aria-busy','false');}
 function rememberAccess(data){
   access=api.rememberState(data);window.clearTimeout(expiryTimer);
@@ -28,7 +28,7 @@ function rememberAccess(data){
     if(remaining>0){expiryTimer=window.setTimeout(expire,Math.min(remaining,2147483647));return;}
     clearProtected();renderAccess('Your session has expired. Check your session to sign in again.');
   };expiryTimer=window.setTimeout(expire,Math.max(0,Math.min(deadline-Date.now(),2147483647)));}
-  $('#logout-button').hidden=!managed||!['authenticated','mfa_required'].includes(access.state);
+  $('#logout-button').hidden=!managed||access.state!=='authenticated';
   $('#recovery-button').hidden=!managed||access.state!=='authenticated';
   return access;
 }
@@ -37,30 +37,28 @@ function renderAccess(message=''){
   const phase=access?.state||'anonymous';let body,title='Sign-in required',subtitle='Owner access to your property workspace.';
   if(phase==='recovery_pending'){
     title='Recovery preparation';subtitle='Recovery requires authorized review before access can resume.';
-    body='<div class="auth-guidance"><h2>Recovery prepared for review</h2><p>No recovery email or text message has been sent. No password or authenticator has been reset. Contact your authorized account operator to review the managed recovery procedure.</p></div>'+btn('Check session','refresh','primary');
+    body='<div class="auth-guidance"><h2>Recovery prepared for review</h2><p>No recovery email or text message has been sent. Your password has not been reset. Contact your authorized account operator to review the managed recovery procedure.</p></div>'+btn('Check session','refresh','primary');
   }else if(recoveryView){
     title='Prepare account recovery';subtitle='Prepare the managed recovery process for operator review.';
-    body='<p class="auth-guidance">This prepares recovery guidance. It does not send an email, reset a password or bypass your authenticator. A current owner session will be signed out first.</p><form id="owner-recovery" class="auth-form"><div class="field"><label for="recovery-email">Email</label><input id="recovery-email" name="email" type="email" autocomplete="email" required></div><p id="access-error" role="alert" tabindex="-1"></p><button class="button primary" type="submit" '+(!api.csrfToken?'disabled':'')+'>Prepare recovery</button></form>'+btn('Back to sign in','access-back','subtle');
-  }else if(phase==='mfa_required'){
-    title='Verify your authenticator';subtitle='Owner access requires a verified authenticator code.';
-    const factors=(access.factors||[]).filter(f=>f.status==='verified'),factorId=enrollment?.factorId||factors[0]?.id;
-    body=(enrollment?'<div class="auth-enrollment"><h2>Set up your authenticator</h2><p>Scan this QR code with your authenticator app, then enter its six-digit code. Keep this setup code private.</p><img id="enrollment-qr" alt="Authenticator setup QR code" width="200" height="200"></div>':'')+
-      (factorId?`<form id="owner-mfa" class="auth-form">${factors.length>1&&!enrollment?`<div class="field"><label for="factor-id">Authenticator</label><select id="factor-id" name="factorId">${factors.map((f,i)=>`<option value="${e(f.id)}">Authenticator ${i+1}</option>`).join('')}</select></div>`:`<input type="hidden" name="factorId" value="${e(factorId)}">`}<div class="field"><label for="verification-code">Verification code</label><input id="verification-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required aria-describedby="code-help"><small id="code-help">Enter the current six-digit code from your authenticator.</small></div><p id="access-error" role="alert" tabindex="-1"></p><button class="button primary" type="submit">Verify code</button></form>`:
-      '<div class="auth-guidance"><p>Set up an authenticator to protect owner access. Property records stay locked until verification is complete.</p></div><p id="access-error" role="alert" tabindex="-1"></p>'+btn('Set up authenticator','mfa-enroll','primary'))+
-      btn('Prepare account recovery','access-recovery','subtle');
+    body='<p class="auth-guidance">This prepares recovery guidance. It does not send an email or reset a password. A current owner session will be signed out first.</p><form id="owner-recovery" class="auth-form"><div class="field"><label for="recovery-email">Email</label><input id="recovery-email" name="email" type="email" autocomplete="email" required></div><p id="access-error" role="alert" tabindex="-1"></p><button class="button primary" type="submit" '+(!api.csrfToken?'disabled':'')+'>Prepare recovery</button></form>'+btn('Back to sign in','access-back','subtle');
   }else{
     body='<form id="owner-login" class="auth-form"><div class="field"><label for="owner-email">Email</label><input id="owner-email" name="email" type="email" autocomplete="username" required></div><div class="field"><label for="owner-password">Password</label><input id="owner-password" name="password" type="password" autocomplete="current-password" required></div><p id="access-error" role="alert" tabindex="-1"></p><button class="button primary" type="submit" '+(!api.csrfToken?'disabled':'')+'>Sign in</button></form><p class="auth-guidance">Access is limited to the configured owner. Partners and tenants do not have logins.</p>'+btn('Prepare account recovery','access-recovery','subtle');
   }
   $('#main').innerHTML=`<section class="panel owner-access"><span class="eyebrow">HAMDEE OWNER ACCESS</span><h1>${title}</h1><p class="auth-subtitle">${subtitle}</p>${message?`<p class="auth-notice" role="status">${e(message)}</p>`:''}${body}<div class="auth-footer">${btn('Check session','refresh','subtle')}</div></section>`;
-  if(enrollment&&$('#enrollment-qr')){
-    const url=enrollment.qrCodeDataUrl;
-    if(typeof url==='string'&&url.length<=524288&&/^data:image\/(svg\+xml|png|jpeg|webp|gif)(;charset=utf-8|;utf8)?(;base64)?,/i.test(url))$('#enrollment-qr').src=url;
-    else{$('#enrollment-qr').remove();showAccessError(new Error('The authenticator setup image is unavailable. Check your session before continuing.'));}
-  }
+
 }
 function showAccessError(error){const target=$('#access-error');if(target){target.textContent=error.message+(error.code==='CSRF_REJECTED'?' Check your session, then submit again.':'');target.focus();}else showUnavailable('Unable to confirm access',error.message);}
 function accountBusy(busy){document.querySelectorAll('.owner-access button,#recovery-button,.topbar [data-action="refresh"]').forEach(button=>button.disabled=busy||(!api.csrfToken&&button.type==='submit'));$('.owner-access')?.setAttribute('aria-busy',String(busy));}
 async function showAccessLoss(error){
+  if(error.code==='CSRF_REJECTED'){
+    // Rental/expense views delegate rejected requests here. A stale write proof
+    // is recoverable: retain the dialog and require an explicit save after GET.
+    const generation=authGeneration,signal=readController?.signal;
+    const target=document.querySelector('#expense-dialog[open] #expense-error,#rental-dialog[open] #rental-error,#dialog[open] #form-error');
+    try{const fresh=await api.authState(signal);if(generation!==authGeneration||signal?.aborted)return;
+      if(fresh.data.state==='authenticated'){rememberAccess(fresh.data);if(target?.isConnected){target.textContent='Session verification renewed. Review your draft, then save explicitly.';target.focus();}return;}
+    }catch(failure){if(generation!==authGeneration||signal?.aborted)return;if(target?.isConnected){target.textContent=failure.message+' Your draft is retained. Check your session before retrying.';target.focus();return;}}
+  }
   const legacy=managed===false;clearProtected();recoveryView=false;
   if(legacy){showUnavailable('Sign-in required',error.message);return;}
   const controller=beginRead(),seq=routeSequence;
@@ -81,22 +79,27 @@ async function runAccount(action,body={},form=null){
     const result=await api.auth(action,body,controller.signal);
     if(generation!==authGeneration||controller.signal.aborted)return;
     if(result.data.state==='authenticated'){
-      enrollment=null;rememberAccess(result.data);
-      if(action==='login'||action==='mfa/verify')window.history.replaceState(null,'',window.location.pathname+window.location.search+'#dashboard');
+      rememberAccess(result.data);
+      if(action==='login')window.history.replaceState(null,'',window.location.pathname+window.location.search+'#dashboard');
       authController=null;await boot();return;
     }
-    const nextEnrollment=action==='mfa/enroll'?result.data.enrollment:null;
-    if(action==='mfa/enroll'&&(!nextEnrollment||typeof nextEnrollment.factorId!=='string'||!nextEnrollment.factorId||typeof nextEnrollment.qrCodeDataUrl!=='string'))throw new Error('The service did not confirm authenticator setup. Check your session before trying again.');
-    clearProtected();managed=true;recoveryView=false;rememberAccess(result.data);enrollment=nextEnrollment;renderAccess();
-    if(access.state==='mfa_required')$('#verification-code')?.focus();else if(access.state==='anonymous')$('#owner-email')?.focus();
+    clearProtected();managed=true;recoveryView=false;rememberAccess(result.data);renderAccess();
+    if(access.state==='anonymous')$('#owner-email')?.focus();
   }catch(error){
     if(generation!==authGeneration||controller.signal.aborted)return;
-    if((action==='login'&&accessLost(error))||(action==='mfa/verify'&&error.code==='MFA_REQUIRED'))showAccessError(error);
+    if(action==='login'&&accessLost(error)){
+      // A denied login can clear the signed CSRF cookie. Prepare a fresh proof,
+      // retaining the email/error, so the next explicit password attempt works.
+      api.csrfToken=null;
+      try{const fresh=await api.authState(controller.signal);if(generation!==authGeneration||controller.signal.aborted)return;if(fresh.data.state==='anonymous')rememberAccess(fresh.data);}
+      catch{if(generation!==authGeneration||controller.signal.aborted)return;}
+      showAccessError(api.csrfToken?error:new Error(error.message+' Check your session before trying again.'));
+    }
     else if(accessLost(error))await showAccessLoss(error);
     else showAccessError(error);
   }finally{
-    delete body.password;delete body.code;
-    if(form?.isConnected)form.querySelectorAll('input[type="password"],input[name="code"]').forEach(input=>input.value='');
+    delete body.password;
+    if(form?.isConnected)form.querySelectorAll('input[type="password"]').forEach(input=>input.value='');
     if(authController===controller){authController=null;accountBusy(false);}
   }
 }
@@ -127,6 +130,10 @@ async function boot(){
   }catch(error){if(!validRead(seq,controller))return;if(accessLost(error))await showAccessLoss(error);else{clearProtected();showUnavailable('Backend unavailable',error.message);}}
   finally{if(validRead(seq,controller))$('#main').setAttribute('aria-busy','false');}
 }
+function propertyEmpty(){
+  if(!managed)return '<div class="empty"><h2>No authorized properties</h2><p>Create your first basic property or ask an administrator to assign access.</p></div>';
+  return filters.q||filters.archiveState!=='active'||filters.cursor?`<div class="empty"><h2>No matching properties</h2><p>Change your search or record status to see saved properties.</p>${btn('Clear filters','clear-property-filters')}</div>`:'<div class="empty"><h2>No properties yet</h2><p>Add your first property to begin your register.</p></div>';
+}
 function table(rows){return `<div class="table-wrap" tabindex="0" role="region" aria-label="Property records"><table class="data-table"><thead><tr><th scope="col">Property</th><th scope="col">Location</th><th scope="col">Record status</th><th scope="col">Revision</th><th scope="col">Updated</th></tr></thead><tbody>${rows.map(p=>`<tr><td><button class="record-name" data-action="detail" data-id="${e(p.id)}">${e(p.name)}</button><span class="record-sub">${e(p.id)}</span></td><td>${e(p.location||'Not provided')}</td><td><span class="badge ${p.lifecycleStatus==='archived'?'amber':'green'}">${e(p.lifecycleStatus)}</span></td><td>${p.version}</td><td>${e(date(p.updatedAt))}</td></tr>`).join('')}</tbody></table></div>`;}
 async function render(){
   resetExpenses();resetRental();invalidateForm();const controller=beginRead(),seq=routeSequence;navigation();if(!session){if(access)renderAccess();else await boot();return;}$('#main').setAttribute('aria-busy','true');
@@ -142,7 +149,7 @@ async function render(){
       const d=result.data;
       main.innerHTML=heading('Property overview','Saved property metadata from your dedicated service.',can('create')?btn('Add property','create','primary'):'')+
         `<div class="metrics owner-metadata-metrics">${[['Total properties',d.totalProperties,'All saved records'],['Active properties',d.activeProperties,'Registered metadata records'],['Archived properties',d.archivedProperties,'History preserved']].map(([label,value,note])=>`<div class="metric"><div class="metric-top"><span>${label}</span>${icon('properties')}</div><div class="metric-value">${e(value)}</div><p class="metric-note">${note}</p></div>`).join('')}</div>`+
-        `<section class="panel"><div class="panel-header"><div><h2>Recently updated properties</h2><p>Up to ten saved records · Newest updates first</p></div>${btn('View properties','back')}</div>${d.recentProperties.length?table(d.recentProperties):'<div class="empty"><h2>No authorized properties</h2><p>Add your first property to begin your register.</p></div>'}</section>`+
+        `<section class="panel"><div class="panel-header"><div><h2>Recently updated properties</h2><p>Up to ten saved records · Newest updates first</p></div>${btn('View properties','back')}</div>${d.recentProperties.length?table(d.recentProperties):'<div class="empty"><h2>No properties yet</h2><p>Add your first property to begin your register.</p></div>'}</section>`+
         `<div class="metrics owner-metadata-metrics">${['Property profit','Partner returns','Company income'].map(label=>`<div class="metric"><div class="metric-top"><span>${label}</span></div><div class="metric-value unavailable-metric">Unavailable</div><p class="metric-note">Financial module not enabled</p></div>`).join('')}</div>`;
       const rentalTarget=document.createElement('div');rentalTarget.id='rental-dashboard';main.append(rentalTarget);
       const expenseTarget=document.createElement('div');expenseTarget.id='expense-dashboard';main.append(expenseTarget);
@@ -159,7 +166,7 @@ async function render(){
       const result=await api.list(filters,controller.signal);if(!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;page=result;current=null;
       main.innerHTML=heading(route==='dashboard'?'Property overview':'Properties','Authenticated records from the dedicated property service.',can('create')?btn('Add property','create','primary'):'')+
         (route==='dashboard'?`<div class="metrics"><div class="metric"><div class="metric-top"><span>Properties on this page</span>${icon('properties')}</div><div class="metric-value">${result.data.length}</div><p class="metric-note">Authorized records · Current filters</p></div>${['Rental income','Partner returns','Company income'].map(t=>`<div class="metric"><div class="metric-top"><span>${t}</span></div><div class="metric-value unavailable-metric">Unavailable</div><p class="metric-note">Financial module not enabled</p></div>`).join('')}</div>`:'')+
-        `<section class="panel"><div class="panel-header"><div><h2>Property register</h2><p>No rental, funding or ownership terms are inferred.</p></div></div><form id="filters" class="toolbar"><label class="search-field">${icon('search')}<input name="q" aria-label="Search properties" placeholder="Search name or location…" value="${e(filters.q)}" maxlength="200"></label><select name="archiveState" class="filter-select" aria-label="Record status">${[['active','Active records'],['archived','Archived records'],['all','All records']].map(([v,l])=>`<option value="${v}" ${filters.archiveState===v?'selected':''}>${l}</option>`).join('')}</select><button class="button subtle" type="submit">Apply filters</button></form>${result.data.length?table(result.data):'<div class="empty"><h2>No authorized properties</h2><p>Create your first basic property or ask an administrator to assign access.</p></div>'}<div class="table-foot"><span>${result.data.length} records on this page</span>${result.nextCursor?btn('Next page','next'):''}${filters.cursor?btn('First page','first'):''}</div></section>`;
+        `<section class="panel"><div class="panel-header"><div><h2>Property register</h2><p>No rental, funding or ownership terms are inferred.</p></div></div><form id="filters" class="toolbar"><label class="search-field">${icon('search')}<input name="q" aria-label="Search properties" placeholder="Search name or location…" value="${e(filters.q)}" maxlength="200"></label><select name="archiveState" class="filter-select" aria-label="Record status">${[['active','Active records'],['archived','Archived records'],['all','All records']].map(([v,l])=>`<option value="${v}" ${filters.archiveState===v?'selected':''}>${l}</option>`).join('')}</select><button class="button subtle" type="submit">Apply filters</button></form>${result.data.length?table(result.data):propertyEmpty()}<div class="table-foot"><span>${result.data.length} records on this page</span>${result.nextCursor?btn('Next page','next'):''}${filters.cursor?btn('First page','first'):''}</div></section>`;
     }else{main.innerHTML=heading(nav.find(n=>n[0]===route)?.[1]||'Unavailable','This module is outside the current property-foundation slice.')+unavailable('Module unavailable','The existing demo remains separate. This development workspace does not use sample financial data or simulate operational actions.');}
   }catch(error){if(!validRead(seq,controller))return;if(accessLost(error))await showAccessLoss(error);else showUnavailable(error.status===404?'Property unavailable':error.status===403?'Access restricted':'Unable to load records',error.message);}
   finally{if(validRead(seq,controller))main.setAttribute('aria-busy','false');}
@@ -173,10 +180,10 @@ function dialog(action){
 }
 function closeDialog(){if($('#save-button').disabled)return;$('#dialog').close();formContext=null;pending=null;trigger?.focus();}
 document.addEventListener('submit',async event=>{
-  if(['owner-login','owner-mfa','owner-recovery'].includes(event.target.id)){
+  if(['owner-login','owner-recovery'].includes(event.target.id)){
     event.preventDefault();const form=event.target,body=Object.fromEntries(new FormData(form));
-    form.querySelectorAll('input[type="password"],input[name="code"]').forEach(input=>input.value='');
-    await runAccount(form.id==='owner-login'?'login':form.id==='owner-mfa'?'mfa/verify':'recovery',body,form);return;
+    form.querySelectorAll('input[type="password"]').forEach(input=>input.value='');
+    await runAccount(form.id==='owner-login'?'login':'recovery',body,form);return;
   }
   if(event.target.id==='filters'){event.preventDefault();const d=Object.fromEntries(new FormData(event.target));filters={...filters,...d,cursor:''};await render();return;}
   if(event.target.id!=='property-form')return;event.preventDefault();
@@ -201,8 +208,8 @@ document.addEventListener('submit',async event=>{
 document.addEventListener('click',async event=>{
   const target=event.target.closest('[data-action]');if(!target)return;const action=target.dataset.action;
   if(action==='logout'){await logout();return;}
-  if(action==='mfa-enroll'){await runAccount('mfa/enroll');return;}
   if(action==='refresh-proof'){await refreshProof();return;}
+  if(action==='clear-property-filters'){filters={archiveState:'active',q:'',limit:'50',cursor:''};await render();$('#filters input[name="q"]')?.focus();return;}
   if(action==='access-recovery'){
     if(authController)return;const state=access;clearProtected();if(state){managed=true;rememberAccess(state);}recoveryView=true;renderAccess();$('#recovery-email')?.focus();return;
   }
