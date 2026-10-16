@@ -43,7 +43,7 @@ test('operations shells preserve owner access and never fabricate unconnected ba
   await expect(page.getByRole('link',{name:'Company Finance',exact:true})).toHaveCount(0);
   await page.goto(server.url+'/workspace/index.html#company');await expect(page.getByRole('heading',{name:'Company Finance unavailable',exact:true})).toBeVisible();
   await expect(page.getByRole('link',{name:'Personal Finance',exact:true})).toHaveCount(0);
-  await page.goto(server.url+'/workspace/index.html#personal-finance');await expect(page.getByRole('heading',{name:'Module unavailable',exact:true})).toBeVisible();
+  await page.goto(server.url+'/workspace/index.html#personal-finance');await expect(page.getByRole('heading',{name:'Personal Finance unavailable',exact:true})).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();expect(errors).toEqual([]);
 });
 test('property rooms remain in the parent property workspace',async({page})=>{

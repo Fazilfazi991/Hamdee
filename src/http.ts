@@ -10,7 +10,7 @@ const base='/api/hamdee/v1';
 /** Trusted server compositions only. Each module keeps its financial validation,
  * transaction, audit and command replay inside the existing owner context. */
 export interface OperationsApiService {
-  overview(identity:Identity,query:{month:string;asOf:string;collectorId?:string;accountId?:string}):Promise<unknown>;
+  overview(identity:Identity,query:{month:string;asOf:string;collectorId?:string;accountId?:string;vehicleId?:string;availabilityStart?:string;availabilityEnd?:string}):Promise<unknown>;
   receipts?(identity:Identity,query:{asOf:string;propertyId?:string;cursor?:string}):Promise<unknown>;
   mutate(identity:Identity,input:unknown,key:string,requestId:string):Promise<unknown>;
 }
@@ -18,6 +18,7 @@ export interface OperationsApiServices {
   readonly staffCollections?:OperationsApiService;
   readonly companyFinance?:OperationsApiService;
   readonly carRentals?:OperationsApiService;
+  readonly personalFinance?:OperationsApiService;
 }
 async function readJson(request:Request):Promise<unknown> {
   requireThat(request.headers.get('content-type')?.split(';')[0]==='application/json',415,'JSON_REQUIRED','Submit JSON metadata.');
@@ -39,7 +40,7 @@ export function createHandler(provider:IdentityProvider,service:PropertyService,
       const path=url.pathname.slice(base.length).replace(/\/$/,'');
       if(path==='/session'&&request.method==='GET') return json({data:{...session,authenticationProvider:provider.kind||'server-validated'}});
       const moduleName=path.split('/')[1];
-      const modules:Record<string,keyof OperationsApiServices>={'staff-collections':'staffCollections','company-finance':'companyFinance','car-rentals':'carRentals'};
+      const modules:Record<string,keyof OperationsApiServices>={'staff-collections':'staffCollections','company-finance':'companyFinance','personal-finance':'personalFinance','car-rentals':'carRentals'};
       if(Object.hasOwn(modules,moduleName)){
         const modulePath='/'+moduleName,isCommand=path===modulePath+'/commands',isReceipts=moduleName==='staff-collections'&&path===modulePath+'/receipts';
         requireThat(path===modulePath||isCommand||isReceipts,404,'NOT_FOUND','Endpoint not found.');
@@ -49,20 +50,23 @@ export function createHandler(provider:IdentityProvider,service:PropertyService,
         requireThat(request.method===(isCommand?'POST':'GET'),405,'METHOD_NOT_ALLOWED','This method is unavailable.');
         const module=operations[modules[moduleName]];
         if(!isCommand){
-          const filter=isReceipts?'propertyId':moduleName==='staff-collections'?'collectorId':moduleName==='company-finance'?'accountId':null;
-          const allowed=isReceipts?['asOf','propertyId','cursor']:['month','asOf',...(filter?[filter]:[])];
+          const filter=isReceipts?'propertyId':moduleName==='staff-collections'?'collectorId':moduleName==='car-rentals'?'vehicleId':'accountId';
+          const allowed=isReceipts?['asOf','propertyId','cursor']:['month','asOf',filter,...(moduleName==='car-rentals'?['availabilityStart','availabilityEnd']:[])];
           requireThat([...url.searchParams.keys()].every(k=>allowed.includes(k)&&url.searchParams.getAll(k).length===1),400,'INVALID_QUERY','Check the reporting filters.');
           const asOf=url.searchParams.get('asOf')??'',month=url.searchParams.get('month')??'',selected=filter?url.searchParams.get(filter):null;
           const cursor=isReceipts?url.searchParams.get('cursor'):null;
+          const availability=moduleName==='car-rentals'?Object.fromEntries(['availabilityStart','availabilityEnd'].filter(k=>url.searchParams.has(k)).map(k=>[k,url.searchParams.get(k)!])):{};
           requireThat(/^(19|[2-9]\d)\d{2}-\d{2}-\d{2}$/.test(asOf)&&Number.isFinite(Date.parse(asOf))&&new Date(asOf).toISOString().slice(0,10)===asOf&&
             (isReceipts||/^(19|[2-9]\d)\d{2}-(0[1-9]|1[0-2])$/.test(month))&&(selected===null||uuid.test(selected))&&
             (cursor===null||/^[A-Za-z0-9_-]{1,512}$/.test(cursor)),400,'INVALID_QUERY','Choose valid reporting dates and record filters.');
+          requireThat(Object.values(availability).every(d=>/^(19|[2-9]\d)\d{2}-\d{2}-\d{2}$/.test(d)&&Number.isFinite(Date.parse(d))&&new Date(d).toISOString().slice(0,10)===d)&&
+            (!availability.availabilityEnd||availability.availabilityEnd>=(availability.availabilityStart??asOf)),400,'INVALID_QUERY','Choose an ordered availability date range.');
           requireThat(module,503,'CONFIGURATION_UNAVAILABLE','The requested operational module is unavailable.');
           if(isReceipts){
             requireThat(module.receipts,503,'CONFIGURATION_UNAVAILABLE','The requested operational module is unavailable.');
             return json({data:await module.receipts(identity,{asOf,...(selected?{propertyId:selected}:{}),...(cursor?{cursor}:{})})});
           }
-          return json({data:await module.overview(identity,{month,asOf,...(selected&&filter?{[filter]:selected}:{})})});
+          return json({data:await module.overview(identity,{month,asOf,...(selected&&filter?{[filter]:selected}:{}),...availability})});
         }
         requireThat([...url.searchParams.keys()].length===0,400,'INVALID_QUERY','Command requests do not accept query filters.');
         requireThat(request.headers.get('origin')===url.origin,403,'ORIGIN_REJECTED','This request origin is not permitted.');

@@ -7,6 +7,8 @@ let session=null,current=null,formContext=null,pending=null,trigger=null,routeSe
 let filters={archiveState:'active',q:'',limit:'50',cursor:''},page=null;
 let managed=null,access=null,recoveryView=false,readController=null,writeController=null,authController=null,expiryTimer=null;
 let staffWorkspace=null,staffReady=false,capabilityController=null;
+let carReady=false,companyReady=false,personalReady=false,carWorkspace=null,companyWorkspace=null,personalWorkspace=null;
+function resetOwnerOperations(){carWorkspace?.resetCarRentals();companyWorkspace?.resetCompanyFinance();personalWorkspace?.resetPersonalFinance();}
 // Retain HAMDEE's paper panels, brass actions, Inter and compact 4px rhythm.
 // Owner access has one primary action; property metadata keeps its existing hierarchy.
 const can=action=>session?.capabilities.includes(action);
@@ -19,7 +21,7 @@ const rentalSections=['rental','rooms','tenants','agreements','collections','che
 const expenseSections=['expenses','landlord','utilities','maintenance'];
 function closeNavigation(returnFocus=false){$('#sidebar').classList.remove('open');$('.workspace').inert=false;document.body.classList.remove('navigation-open');$('.mobile-menu').setAttribute('aria-expanded','false');if(returnFocus)$('.mobile-menu').focus();}
 function invalidateForm(){writeController?.abort();writeController=null;formContext=null;pending=null;$('#dialog').close();$('#dialog-body').innerHTML='';$('#conflict-review').innerHTML='';$('#form-error').textContent='';$('#save-button').disabled=false;$('#property-form').removeAttribute('aria-busy');}
-function clearProtected(){closeNavigation();staffReady=false;capabilityController?.abort();capabilityController=null;staffWorkspace?.resetStaffCollections();resetExpenses();resetRental();authGeneration++;routeSequence++;readController?.abort();authController?.abort();window.clearTimeout(expiryTimer);session=null;current=null;page=null;access=null;api.csrfToken=null;invalidateForm();$('#user-context').textContent='Not signed in';$('#logout-button').hidden=true;$('#recovery-button').hidden=true;document.querySelectorAll('#recovery-button,.topbar [data-action="refresh"]').forEach(button=>button.disabled=false);$('#feedback').textContent='';$('#mode-detail').textContent='Property and rental records · backend required';}
+function clearProtected(){closeNavigation();resetOwnerOperations();carReady=false;companyReady=false;personalReady=false;staffReady=false;capabilityController?.abort();capabilityController=null;staffWorkspace?.resetStaffCollections();resetExpenses();resetRental();authGeneration++;routeSequence++;readController?.abort();authController?.abort();window.clearTimeout(expiryTimer);session=null;current=null;page=null;access=null;api.csrfToken=null;invalidateForm();$('#user-context').textContent='Not signed in';$('#logout-button').hidden=true;$('#recovery-button').hidden=true;document.querySelectorAll('#recovery-button,.topbar [data-action="refresh"]').forEach(button=>button.disabled=false);$('#feedback').textContent='';$('#mode-detail').textContent='Property and rental records · backend required';}
 function beginRead(){readController?.abort();readController=new window.AbortController();routeSequence++;return readController;}
 const validRead=(seq,controller)=>seq===routeSequence&&!controller.signal.aborted;
 const accessLost=error=>error.status===401||error.code==='OWNER_ACCESS_DENIED';
@@ -125,7 +127,7 @@ async function refreshProof(){
 function navigation(){
   const route=(window.location.hash.slice(1)||'dashboard').split('/')[0],active=['tenants','collections','cheques'].includes(route)?'properties':route==='maintenance'?'expenses':route;
   const focused=$('#navigation').contains(document.activeElement)?document.activeElement.closest('a')?.getAttribute('href'):null;
-  const enabled=new Set(['dashboard','properties',...(managed!==false?['expenses','reports']:[]),...(staffReady?['staff-collections']:[])]);
+  const enabled=new Set(['dashboard','properties',...(managed!==false?['expenses','reports']:[]),...(staffReady?['staff-collections']:[]),...(carReady?['car-rentals']:[]),...(companyReady?['company']:[]),...(personalReady?['personal-finance']:[])]);
   $('#navigation').innerHTML='<div class="nav-group">WORKSPACE</div>'+nav.map(([id,name,ico])=>enabled.has(id)?`<a class="nav-link ${active===id?'active':''}" href="#${id}" ${active===id?'aria-current="page"':''}>${icon(ico)}<span>${e(name)}</span></a>`:`<button type="button" class="nav-link nav-unavailable" disabled>${icon(ico)}<span>${e(name)}</span><small>Unavailable</small></button>`).join('');
   $('#crumb').textContent=nav.find(n=>n[0]===active)?.[1]||'Property workspace';
   if(focused)[...$('#navigation').querySelectorAll('a')].find(link=>link.getAttribute('href')===focused)?.focus();
@@ -133,16 +135,18 @@ function navigation(){
 async function discoverOperations(){
   if(!session||!managed)return;capabilityController?.abort();const controller=new window.AbortController(),generation=authGeneration;capabilityController=controller;
   const asOf=new Date().toISOString().slice(0,10),month=asOf.slice(0,7),valid=()=>generation===authGeneration&&!controller.signal.aborted&&Boolean(session);
+  const arrays=(data,keys)=>data?.moneyUnit==='decimal-major-unit-strings'&&keys.every(key=>Array.isArray(data[key]));
+  const scoped=(data,scope)=>arrays(data,['accounts','transferAccounts','totals','entries','monthEntries'])&&data.scope===scope&&data.accounts.every(row=>row.scope===scope);
   try{
-    const results=await Promise.allSettled([api.staffRead({month,asOf},controller.signal),api.financeRead({month,asOf},controller.signal)]);
+    const results=await Promise.allSettled([api.staffRead({month,asOf},controller.signal),api.financeRead({month,asOf},controller.signal),api.personalRead({month,asOf},controller.signal),api.carRead({month,asOf},controller.signal)]);
     if(!valid())return;
     for(const result of results)if(result.status==='rejected'&&accessLost(result.reason)){await showAccessLoss(result.reason);return;}
-    if(results.some(result=>result.status!=='fulfilled')){staffReady=false;navigation();return;}
-    const [staff,finance]=results.map(result=>result.value.data);
-    const ready=staff?.moneyUnit==='decimal-major-unit-strings'&&['collectors','collections','handovers','totals','daily','history'].every(key=>Array.isArray(staff[key]))&&Array.isArray(finance?.accounts);
-    if(ready&&(!await syncAccess(controller.signal)||!valid()))return;
-    if(valid()){staffReady=ready;navigation();}
-  }catch(error){if(valid()){if(accessLost(error))await showAccessLoss(error);else{staffReady=false;navigation();}}}
+    const [staff,company,personal,cars]=results.map(result=>result.status==='fulfilled'?result.value.data:null);
+    const nextStaff=arrays(staff,['collectors','collections','handovers','totals','daily','history'])&&Array.isArray(company?.accounts);
+    const nextCompany=scoped(company,'company'),nextPersonal=scoped(personal,'personal'),nextCar=arrays(cars,['vehicles','agreements','availability','balances','collections','expenses','history','summary']);
+    if((nextStaff||nextCompany||nextPersonal||nextCar)&&(!await syncAccess(controller.signal)||!valid()))return;
+    if(valid()){staffReady=nextStaff;companyReady=nextCompany;personalReady=nextPersonal;carReady=nextCar;navigation();}
+  }catch(error){if(valid()){if(accessLost(error))await showAccessLoss(error);else{staffReady=false;carReady=false;companyReady=false;personalReady=false;navigation();}}}
   finally{if(capabilityController===controller)capabilityController=null;}
 }
 async function boot(){
@@ -163,16 +167,20 @@ function propertyEmpty(){
 function table(rows){return `<div class="table-wrap" tabindex="0" role="region" aria-label="Property records"><table class="data-table"><thead><tr><th scope="col">Property</th><th scope="col">Location</th><th scope="col">Record status</th><th scope="col">Revision</th><th scope="col">Updated</th></tr></thead><tbody>${rows.map(p=>`<tr><td><button class="record-name" data-action="detail" data-id="${e(p.id)}">${e(p.name)}</button><span class="record-sub">${e(p.id)}</span></td><td>${e(p.location||'Not provided')}</td><td><span class="badge ${p.lifecycleStatus==='archived'?'amber':'green'}">${e(p.lifecycleStatus)}</span></td><td>${p.version}</td><td>${e(date(p.updatedAt))}</td></tr>`).join('')}</tbody></table></div>`;}
 async function render(){
   const route=window.location.hash.slice(1)||'dashboard',sameProperty=route.startsWith('properties/')&&current?.id===route.split('/')[1];
-  staffWorkspace?.resetStaffCollections();
+  staffWorkspace?.resetStaffCollections();resetOwnerOperations();
   resetExpenses(sameProperty);resetRental(sameProperty);invalidateForm();const controller=beginRead(),seq=routeSequence;navigation();if(!session){if(access)renderAccess();else await boot();return;}$('#main').setAttribute('aria-busy','true');
   const main=$('#main');
   main.innerHTML='<div class="empty" role="status"><h2>Loading authorized records…</h2></div>';
   try{
-    if(['staff-collections','car-rentals','company'].includes(route)&&managed){
+    if(['staff-collections','car-rentals','company','personal-finance'].includes(route)&&managed){
       current=null;page=null;main.innerHTML=heading(nav.find(n=>n[0]===route)[1],'Owner workspace · Saved records only')+'<div id="operations-workspace"></div>';
       if(route==='staff-collections'){const module=await import('./staff-collections.js');if(!validRead(seq,controller))return;staffWorkspace=module;await module.renderStaffCollections($('#operations-workspace'),{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});}
-      else if(route==='car-rentals'){const module=await import('./car-rentals.js');if(validRead(seq,controller))module.renderCarRentals($('#operations-workspace'));}
-      else{const module=await import('./company-finance.js');if(validRead(seq,controller))module.renderCompanyFinance($('#operations-workspace'));}
+      else{
+        const options={api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss};
+        if(route==='car-rentals'){const module=await import('./car-rentals.js');if(!validRead(seq,controller))return;carWorkspace=module;await module.renderCarRentals($('#operations-workspace'),options);}
+        else if(route==='personal-finance'){const module=await import('./personal-finance.js');if(!validRead(seq,controller))return;personalWorkspace=module;await module.renderPersonalFinance($('#operations-workspace'),options);}
+        else{const module=await import('./company-finance.js');if(!validRead(seq,controller))return;companyWorkspace=module;await module.renderCompanyFinance($('#operations-workspace'),options);}
+      }
     }else if(route.startsWith('properties/')){
       const [,id,section='overview']=route.split('/'),result=await api.get(id,controller.signal);if(!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;current=result.data;
       const p=current;main.innerHTML=heading(p.name,'Stable property identity · Metadata only',btn('Back to properties','back')+(can('update')&&p.lifecycleStatus!=='archived'?btn('Edit property','edit','primary'):'')+(can('archive')&&p.lifecycleStatus!=='archived'?btn('Archive','archive','danger'):'')+(can('restore')&&p.lifecycleStatus==='archived'?btn('Restore','restore','primary'):''))+

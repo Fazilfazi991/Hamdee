@@ -10,6 +10,7 @@ import { randomBytes,randomUUID } from 'node:crypto';
 import { uuid } from './validation';
 import { StaffCollectionsService } from './staff-collections';
 import { CompanyFinanceService } from './company-finance';
+import { CarRentalService,combinedReceiptSourceReader } from './car-rentals';
 
 export interface OwnerApplicationOptions extends OwnerAuthOptions {
   readonly database:Database;
@@ -30,7 +31,8 @@ export function createOwnerApplication(options:OwnerApplicationOptions):OwnerApp
   // Construction does not query the optional operations schema. Existing auth
   // and property activation remain independent of local migration 006.
   const operations=options.operationsFactory?.(service)??{
-    staffCollections:new StaffCollectionsService(service),companyFinance:new CompanyFinanceService(service)
+    staffCollections:new StaffCollectionsService(service,combinedReceiptSourceReader),companyFinance:new CompanyFinanceService(service,combinedReceiptSourceReader,'company'),
+    personalFinance:new CompanyFinanceService(service,combinedReceiptSourceReader,'personal'),carRentals:new CarRentalService(service)
   };
   const cookieFlags=`Path=/; HttpOnly; SameSite=Strict${options.policy.cookieSecure?'; Secure':''}; Max-Age=0`;
   const clear=[`hamdee_owner=; ${cookieFlags}`,`hamdee_csrf=; ${cookieFlags}`];

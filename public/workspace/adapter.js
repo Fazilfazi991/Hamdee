@@ -31,6 +31,10 @@ export class PropertyApi {
   staffWrite(body,key,signal){return this.request('/staff-collections/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   financeRead(filters,signal){return this.request('/company-finance?'+new URLSearchParams(filters),{signal});}
   financeWrite(body,key,signal){return this.request('/company-finance/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
+  personalRead(filters,signal){return this.request('/personal-finance?'+new URLSearchParams(filters),{signal});}
+  personalWrite(body,key,signal){return this.request('/personal-finance/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
+  carRead(filters,signal){return this.request('/car-rentals?'+new URLSearchParams(filters),{signal});}
+  carWrite(body,key,signal){return this.request('/car-rentals/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   rentalRead(filters,signal){return this.request('/rental?'+new URLSearchParams(filters),{signal});}
   expenseRead(filters,signal){return this.request('/expenses?'+new URLSearchParams(filters),{signal});}
   expenseWrite(body,key,signal){return this.request('/expenses',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}

@@ -27,7 +27,7 @@ export type FinanceCommand =
  | {action:'transfer';fromAccountId:string;toAccountId:string;transferredOn:string;amount:string;reference:string;notes?:string}
  | {action:'reverse';entryId:string;reversedOn:string;reason:string};
 export interface AccountTotal {accountId:string;currency:string;opening:string;receipts:string;expenses:string;transfersIn:string;transfersOut:string;balance:string}
-export interface FinanceOverview {accounts:CashAccount[];totals:AccountTotal[];entries:OperationRow[];monthEntries:OperationRow[];month:string;asOf:string;moneyUnit:'decimal-major-unit-strings';basis:string}
+export interface FinanceOverview {accounts:CashAccount[];transferAccounts:CashAccount[];scope:'company'|'personal'|'all';totals:AccountTotal[];entries:OperationRow[];monthEntries:OperationRow[];month:string;asOf:string;moneyUnit:'decimal-major-unit-strings';basis:string}
 export interface ClassifiedReceiptRecord {id:string;receiptKey:string;classification:string;receivedDate:string;amount:string;currency:string;method:'cash'|'bank'|'cheque';status:'recorded'|'pending';reference:string;notes:string}
 export interface CashLedgerRecord {id:string;locationType:'account'|'collector';accountId:string|null;collectorId:string|null;businessDate:string;delta:string;currency:string;method:'cash'|'bank';entryKind:string;classification:string;reference:string;notes:string}
 export interface CashTransferRecord {id:string;fromAccountId:string|null;toAccountId:string;collectorId:string|null;amount:string;currency:string;businessDate:string;reference:string;notes:string}
@@ -147,17 +147,21 @@ export async function sourcePlacementDate(sql:Sql,claimId:string,sourceDate:stri
 }
 
 export class CompanyFinanceService {
- constructor(private readonly properties:PropertyService,private readonly sources:ReceiptSourceReader=localReceiptReader){}
+ constructor(private readonly properties:PropertyService,private readonly sources:ReceiptSourceReader=localReceiptReader,private readonly accountScope?:'company'|'personal'){}
+ private checkScope(account:OperationRow){operationCheck(!this.accountScope||account.scope===this.accountScope,'Choose an account in this ledger.','ACCOUNT_SCOPE_MISMATCH',409);}
  async mutate(identity:Identity,input:unknown,key:string,requestId:string):Promise<FinanceMutationResult>{
   const b=allowFields(input,{'create-account':['name','scope','kind','currency','openingDate','openingAmount','ownerConfirmedOpening','notes'],
    'create-classified-receipt':['receiptKey','classification','receivedOn','amount','currency','method','reference','notes'],
    receive:['accountId','sourceKind','sourceId','ownerConfirmedDisposition','notes'],expense:['accountId','expenseKey','paidOn','amount','reference','notes'],
    transfer:['fromAccountId','toAccountId','transferredOn','amount','reference','notes'],reverse:['entryId','reversedOn','reason']});
-  return await operationWrite(this.properties,identity,'finance',b,key,requestId,async(sql,actorId,eventId)=>{
+  // Preserve published company command digests/replay; personal has a distinct
+  // namespace so an identical key/body cannot replay across the two ledgers.
+  return await operationWrite(this.properties,identity,this.accountScope==='personal'?'personal-finance':'finance',b,key,requestId,async(sql,actorId,eventId)=>{
    let record:OperationRow;
    if(b.action==='create-account'){
     operationCheck(b.ownerConfirmedOpening===true,'The owner must explicitly confirm this opening.','OPENING_UNCONFIRMED',409);
     operationCheck(['company','personal'].includes(String(b.scope))&&['cash','bank'].includes(String(b.kind)),'Choose account scope and cash/bank type.');
+    this.checkScope(b);
     const accountId=randomUUID(),openingId=randomUUID(),openingAmount=exactAmount(b.openingAmount,true),openingDate=date(b.openingDate),currency=explicitCurrency(b.currency);
     record=await insertOperation(sql,'ops_accounts',{id:accountId,name:text(b.name,200),scope:b.scope,kind:b.kind,currency,opening_date:openingDate,opening_amount:openingAmount,owner_confirmed:true,opening_entry_id:openingId,notes:text(b.notes??'',2000,false),event_id:eventId});
     await moneyEntry(sql,eventId,{id:openingId,account_id:accountId,entry_kind:'opening',delta:openingAmount,currency,business_date:openingDate,method:b.kind,classification:'owner-confirmed-opening'});
@@ -167,6 +171,7 @@ export class CompanyFinanceService {
     record=await insertOperation(sql,'ops_receipts',{id:randomUUID(),receipt_key:receiptKey,classification:text(b.classification,120),received_date:date(b.receivedOn),amount:exactAmount(b.amount),currency:explicitCurrency(b.currency),method:b.method,status:b.method==='cheque'?'pending':'recorded',reference:text(b.reference??'',200,false),notes:text(b.notes??'',2000,false),event_id:eventId});
    }else if(b.action==='receive'){
     operationCheck(b.ownerConfirmedDisposition===true,'Confirm actual receipt into this account.','DISPOSITION_REQUIRED',409);const account=await cashAccount(sql,b.accountId),source=await verifiedReceipt(sql,this.sources,b.sourceKind,b.sourceId);
+    this.checkScope(account);
     operationCheck(source.status==='recorded'&&source.method!=='cheque','Pending receipts/cheques are not available cash.','SOURCE_PENDING',409);
     operationCheck(source.disposition!=='collector-held'&&(!source.accountId||source.accountId===account.id),'Source funds belong to another holding location.','SOURCE_LOCATION_MISMATCH',409);
     operationCheck(source.currency===account.currency,'Currencies must match.','CURRENCY_MISMATCH',409);const claim=await sourceClaim(sql,eventId,source);
@@ -174,17 +179,20 @@ export class CompanyFinanceService {
     record=await moneyEntry(sql,eventId,{account_id:account.id,entry_kind:'receipt',delta:source.amount,currency:source.currency,business_date:await sourcePlacementDate(sql,claim,source.date),method:source.method,claim_id:claim,classification:source.classification,notes:text(b.notes??'',2000,false)});
    }else if(b.action==='expense'){
     const account=await cashAccount(sql,b.accountId),expenseKey=id(b.expenseKey);
+    this.checkScope(account);
     operationCheck(!(await sql.query('SELECT id FROM hamdee_private.ops_expense_keys WHERE id=$1',[expenseKey])).rows.length,'This expense identity is already recorded.','DUPLICATE_EXPENSE',409);
     record=await moneyEntry(sql,eventId,{account_id:account.id,entry_kind:'expense',delta:'-'+exactAmount(b.amount),currency:account.currency,business_date:date(b.paidOn),method:account.kind,classification:'owner-recorded-expense',reference:text(b.reference??'',200,false),notes:text(b.notes??'',2000,false)});
     await insertOperation(sql,'ops_expense_keys',{id:expenseKey,entry_id:record.id,event_id:eventId});
    }else if(b.action==='transfer'){
     const from=await cashAccount(sql,b.fromAccountId),to=await cashAccount(sql,b.toAccountId);
+    this.checkScope(from);
     operationCheck(from.id!==to.id&&from.currency===to.currency,'Choose distinct same-currency accounts.','CURRENCY_MISMATCH',409);
     const reference=text(b.reference,200);operationCheck(!(await sql.query('SELECT id FROM hamdee_private.ops_transfers WHERE from_account_id=$1 AND reference=$2',[from.id,reference])).rows.length,'This transfer reference is already recorded.','DUPLICATE_TRANSFER',409);
     record=await insertOperation(sql,'ops_transfers',{id:randomUUID(),collector_id:null,from_account_id:from.id,to_account_id:to.id,currency:from.currency,amount:exactAmount(b.amount),business_date:date(b.transferredOn),reference,notes:text(b.notes??'',2000,false),event_id:eventId});
     for(const [account,kind,sign] of [[from,'transfer-out','-'],[to,'transfer-in','']] as const)await moneyEntry(sql,eventId,{account_id:account.id,entry_kind:kind,delta:sign+record.amount,currency:record.currency,business_date:record.business_date,method:account.kind,transfer_id:record.id,reference,notes:record.notes});
    }else{
     const old=(await sql.query<OperationRow>('SELECT * FROM hamdee_private.ops_money WHERE id=$1',[id(b.entryId)])).rows[0];operationCheck(old&&old.location_type==='account'&&!['handover-in','handover-out'].includes(String(old.entry_kind)),'Use the staff command for collector handover corrections.','INVALID_REVERSAL',409);
+    this.checkScope(await cashAccount(sql,old.account_id));
     if(old.entry_kind==='receipt')operationCheck(!(await sql.query(`SELECT id FROM hamdee_private.ops_collections c WHERE c.claim_id=$1 AND c.disposition='company-direct'
       AND NOT EXISTS(SELECT 1 FROM hamdee_private.ops_collection_reversals r WHERE r.collection_id=c.id)`,[old.claim_id])).rows.length,
       'Reverse the linked collector attribution before correcting the direct account receipt.','COLLECTION_LINKED',409);
@@ -196,17 +204,18 @@ export class CompanyFinanceService {
  async overview(identity:Identity,query:{month:string;asOf:string;accountId?:string}){
   const period=month(query.month),asOf=date(query.asOf),accountId=query.accountId?id(query.accountId):null;
   return this.properties.ownerContext(identity,async sql=>{
-   if(accountId)await cashAccount(sql,accountId);
+   if(accountId)this.checkScope(await cashAccount(sql,accountId));
    const data=(await sql.query<{data:OperationRow}>(`WITH eligible AS(SELECT m.*,coalesce(o.entry_kind,m.entry_kind) AS effective_kind FROM hamdee_private.ops_money m LEFT JOIN hamdee_private.ops_money o ON o.id=m.reversal_of
-    WHERE m.location_type='account' AND m.business_date<=$1::date AND ($2::uuid IS NULL OR m.account_id=$2)), totals AS(SELECT account_id,currency,
+    WHERE m.location_type='account' AND m.business_date<=$1::date AND ($2::uuid IS NULL OR m.account_id=$2) AND ($4::text IS NULL OR EXISTS(SELECT 1 FROM hamdee_private.ops_accounts a WHERE a.id=m.account_id AND a.scope=$4))), totals AS(SELECT account_id,currency,
     coalesce(sum(delta) FILTER(WHERE effective_kind='opening'),0)::text AS opening,coalesce(sum(delta) FILTER(WHERE effective_kind='receipt'),0)::text AS receipts,
     (-coalesce(sum(delta) FILTER(WHERE effective_kind='expense'),0))::text AS expenses,coalesce(sum(delta) FILTER(WHERE effective_kind IN ('transfer-in','handover-in')),0)::text AS transfers_in,
     (-coalesce(sum(delta) FILTER(WHERE effective_kind IN ('transfer-out','handover-out')),0))::text AS transfers_out,sum(delta)::text AS balance FROM eligible GROUP BY account_id,currency)
-    SELECT jsonb_build_object('accounts',coalesce((SELECT jsonb_agg(to_jsonb(a)-'event_id'-'opening_amount'||jsonb_build_object('opening_amount',a.opening_amount::text) ORDER BY a.id) FROM hamdee_private.ops_accounts a WHERE ($2::uuid IS NULL OR a.id=$2)),'[]'::jsonb),
+    SELECT jsonb_build_object('accounts',coalesce((SELECT jsonb_agg(to_jsonb(a)-'event_id'-'opening_amount'||jsonb_build_object('opening_amount',a.opening_amount::text) ORDER BY a.id) FROM hamdee_private.ops_accounts a WHERE ($2::uuid IS NULL OR a.id=$2) AND ($4::text IS NULL OR a.scope=$4)),'[]'::jsonb),
+    'transferAccounts',coalesce((SELECT jsonb_agg(to_jsonb(a)-'event_id'-'opening_amount'||jsonb_build_object('opening_amount',a.opening_amount::text) ORDER BY a.id) FROM hamdee_private.ops_accounts a),'[]'::jsonb),
     'totals',coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY account_id,currency) FROM totals t),'[]'::jsonb),
     'entries',coalesce((SELECT jsonb_agg(to_jsonb(e)-'event_id'-'delta'||jsonb_build_object('delta',e.delta::text) ORDER BY business_date,id) FROM eligible e),'[]'::jsonb),
-    'monthEntries',coalesce((SELECT jsonb_agg(to_jsonb(e)-'event_id'-'delta'||jsonb_build_object('delta',e.delta::text) ORDER BY business_date,id) FROM eligible e WHERE to_char(business_date,'YYYY-MM')=$3),'[]'::jsonb)) AS data`,[asOf,accountId,period])).rows[0].data;
-   return {accounts:(data.accounts as OperationRow[]).map(operationView),totals:(data.totals as OperationRow[]).map(operationView),entries:(data.entries as OperationRow[]).map(operationView),monthEntries:(data.monthEntries as OperationRow[]).map(operationView),month:period,asOf,moneyUnit:'decimal-major-unit-strings',basis:'Explicit dated cash/account records only. Transfers and staff handovers are not receipt income or profit.'} as unknown as FinanceOverview;
+    'monthEntries',coalesce((SELECT jsonb_agg(to_jsonb(e)-'event_id'-'delta'||jsonb_build_object('delta',e.delta::text) ORDER BY business_date,id) FROM eligible e WHERE to_char(business_date,'YYYY-MM')=$3),'[]'::jsonb)) AS data`,[asOf,accountId,period,this.accountScope??null])).rows[0].data;
+   return {accounts:(data.accounts as OperationRow[]).map(operationView),transferAccounts:(data.transferAccounts as OperationRow[]).map(operationView),scope:this.accountScope??'all',totals:(data.totals as OperationRow[]).map(operationView),entries:(data.entries as OperationRow[]).map(operationView),monthEntries:(data.monthEntries as OperationRow[]).map(operationView),month:period,asOf,moneyUnit:'decimal-major-unit-strings',basis:'Explicit dated cash/account records only. Transfers and staff handovers are not receipt income or profit.'} as unknown as FinanceOverview;
   });
  }
 }

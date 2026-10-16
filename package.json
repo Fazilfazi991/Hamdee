@@ -12,7 +12,7 @@
     "start": "next start --hostname 127.0.0.1 --port 4180",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src app tests public/workspace/*.js",
-    "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test": "tsx --test --test-concurrency=1 tests/*.test.ts tests/qa/*.test.ts",
     "test:ui": "playwright test",
     "test:native": "tsx --test --test-concurrency=1 --test-timeout=30000 tests/native/*.test.ts",
     "test:runtime": "node scripts/verify-runtime.mjs",
