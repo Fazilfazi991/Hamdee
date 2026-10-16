@@ -14,7 +14,7 @@ async function login(page: Page) {
 }
 async function nav(page: Page, name: string) { const menu = page.getByRole('button', { name: 'Open navigation', exact: true }); if (await menu.isVisible()) await menu.click(); await page.getByRole('link', { name, exact: true }).click(); }
 async function setup(page: Page) {
-  await login(page); await nav(page, 'Properties'); await page.getByRole('button', { name: 'Add property', exact: true }).click();
+  await login(page); await nav(page, 'Villas & Properties'); await page.getByRole('button', { name: 'Add property', exact: true }).click();
   await page.getByLabel('Property name', { exact: true }).fill(villa); await page.getByRole('button', { name: 'Save property', exact: true }).click(); await expect(page.getByRole('heading', { name: villa, exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Rooms & rentals', exact: true }).click(); await page.getByRole('button', { name: 'Add room', exact: true }).click();
   const room = page.locator('#rental-dialog'); await room.getByLabel('Room code', { exact: true }).fill('EXP-R01'); await room.getByRole('button', { name: 'Save record', exact: true }).click(); await expect(room).not.toBeVisible();

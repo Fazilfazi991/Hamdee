@@ -21,7 +21,7 @@ async function navigate(page: Page, name: string) {
   if (await menu.isVisible()) await menu.click();
   await page.getByRole('link', { name, exact: true }).click();
 }
-async function properties(page: Page) { await navigate(page, 'Properties'); }
+async function properties(page: Page) { await navigate(page, 'Villas & Properties'); }
 async function create(page: Page, name: string) {
   await properties(page); await page.getByRole('button', { name: 'Add property', exact: true }).click();
   await page.getByLabel('Property name', { exact: true }).fill(name);

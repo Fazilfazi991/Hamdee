@@ -60,8 +60,8 @@ test('read-only assigned view hides mutation controls; mobile navigation remains
   await expect(page.getByRole('button',{name:'Edit property',exact:true})).toHaveCount(0);
   if(info.project.name==='mobile'){
     await page.getByRole('button',{name:'Open navigation'}).click();
-    await page.getByRole('link',{name:'Properties',exact:true}).click();
-  }else{await page.getByRole('link',{name:'Properties',exact:true}).click();}
+    await page.getByRole('link',{name:'Villas & Properties',exact:true}).click();
+  }else{await page.getByRole('link',{name:'Villas & Properties',exact:true}).click();}
   await expect(page.getByRole('heading',{name:'Properties',exact:true})).toBeVisible();
   await expect(page.getByRole('button',{name:'Add property',exact:true})).toHaveCount(0);
 });

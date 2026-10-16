@@ -27,18 +27,27 @@ async function navigate(page:Page,name:string){
 }
 test('operations shells preserve owner access and never fabricate unconnected balances',async({page},info)=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));await login(page);
-  await navigate(page,'Staff Collections');
+  await expect(page.locator('#navigation button:disabled')).toHaveCount(5);
+  for(const entry of await page.locator('#navigation button:disabled').all()){
+    await expect(entry).toContainText('Unavailable');
+    expect(await entry.getAttribute('href')).toBeNull();
+  }
+  await expect(page.getByRole('link',{name:'Staff Collections',exact:true})).toHaveCount(0);
+  await page.goto(server.url+'/workspace/index.html#staff-collections');
   await expect(page.getByRole('heading',{name:'Staff Collections unavailable',exact:true})).toBeVisible();
   await expect(page.locator('#main')).toContainText('do not provide sign-in access');
   await expect(page.locator('#main input,#main select')).toHaveCount(0);
   await page.screenshot({path:`evidence/operations-ui/${info.project.name}-staff-shell.png`,fullPage:true});
-  await navigate(page,'Car Rentals');await expect(page.getByRole('heading',{name:'Car Rentals unavailable',exact:true})).toBeVisible();
-  await navigate(page,'Company Finance');await expect(page.getByRole('heading',{name:'Company Finance unavailable',exact:true})).toBeVisible();
-  await navigate(page,'Personal Finance');await expect(page.getByRole('heading',{name:'Module unavailable',exact:true})).toBeVisible();
+  await expect(page.getByRole('link',{name:'Car Rentals',exact:true})).toHaveCount(0);
+  await page.goto(server.url+'/workspace/index.html#car-rentals');await expect(page.getByRole('heading',{name:'Car Rentals unavailable',exact:true})).toBeVisible();
+  await expect(page.getByRole('link',{name:'Company Finance',exact:true})).toHaveCount(0);
+  await page.goto(server.url+'/workspace/index.html#company');await expect(page.getByRole('heading',{name:'Company Finance unavailable',exact:true})).toBeVisible();
+  await expect(page.getByRole('link',{name:'Personal Finance',exact:true})).toHaveCount(0);
+  await page.goto(server.url+'/workspace/index.html#personal-finance');await expect(page.getByRole('heading',{name:'Module unavailable',exact:true})).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();expect(errors).toEqual([]);
 });
 test('property rooms remain in the parent property workspace',async({page})=>{
-  await login(page);await navigate(page,'Properties');
+  await login(page);await navigate(page, 'Villas & Properties');
   await page.getByRole('button',{name:'Add property',exact:true}).click();
   await page.getByLabel('Property name',{exact:true}).fill('Synthetic operations parent villa');
   await page.getByRole('button',{name:'Save property',exact:true}).click();

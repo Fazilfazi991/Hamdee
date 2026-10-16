@@ -18,7 +18,7 @@ async function nav(page: Page, name: string) {
   await page.getByRole('link', { name, exact: true }).click();
 }
 async function addProperty(page: Page) {
-  await nav(page, 'Properties'); await page.getByRole('button', { name: 'Add property', exact: true }).click();
+  await nav(page, 'Villas & Properties'); await page.getByRole('button', { name: 'Add property', exact: true }).click();
   await page.getByLabel('Property name', { exact: true }).fill('Synthetic Rental Browser Villa');
   await page.getByRole('button', { name: 'Save property', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Synthetic Rental Browser Villa', exact: true })).toBeVisible();

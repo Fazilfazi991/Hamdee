@@ -25,7 +25,7 @@ async function noMfa(page: Page) {
   expect(server.fixture.fake.facts.calls.enroll).toBe(0); expect(server.fixture.fake.facts.calls.mfa).toBe(0);
 }
 async function create(page: Page, name: string) {
-  await nav(page, 'Properties'); await page.getByRole('button', { name: 'Add property', exact: true }).click();
+  await nav(page, 'Villas & Properties'); await page.getByRole('button', { name: 'Add property', exact: true }).click();
   await page.getByLabel('Property name', { exact: true }).fill(name); await page.getByRole('button', { name: 'Save property', exact: true }).click();
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
 }
@@ -68,7 +68,7 @@ test('Password browser QA: nonowner provider UUID is rejected despite valid synt
 
 test('Password browser QA: keyboard property CRUD, archive/restore and history need no second authentication step', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message)); await login(page);
-  await nav(page, 'Properties'); await page.getByRole('button', { name: 'Add property', exact: true }).click(); await page.keyboard.press('Escape');
+  await nav(page, 'Villas & Properties'); await page.getByRole('button', { name: 'Add property', exact: true }).click(); await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).not.toBeVisible(); await expect(page.getByRole('button', { name: 'Add property', exact: true })).toBeFocused();
   await create(page, 'Synthetic password browser villa'); await page.getByRole('button', { name: 'Edit property', exact: true }).click();
   await page.getByLabel('Property name', { exact: true }).fill('Synthetic password updated villa'); await page.getByRole('button', { name: 'Save property', exact: true }).click();
@@ -101,7 +101,7 @@ test('Password browser QA: unsafe write without CSRF cannot create a record; log
 });
 
 test('Password browser QA: failed save retains draft and hides raw server details', async ({ page }, info) => {
-  await login(page); await nav(page, 'Properties'); await page.getByRole('button', { name: 'Add property', exact: true }).click();
+  await login(page); await nav(page, 'Villas & Properties'); await page.getByRole('button', { name: 'Add property', exact: true }).click();
   await page.getByLabel('Property name', { exact: true }).fill('Synthetic password retained draft');
   await page.route('**/api/hamdee/v1/properties', route => route.request().method() === 'POST' ? route.fulfill({ status: 503, contentType: 'text/html', body: 'PRIVATE_QA_STACK_MUST_NOT_RENDER' }) : route.continue());
   await page.getByRole('button', { name: 'Save property', exact: true }).click(); await expect(page.getByRole('dialog')).toBeVisible();
