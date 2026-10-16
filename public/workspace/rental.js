@@ -69,10 +69,23 @@ function show(title,body,state,trigger){
  let d=modal();if(!d){d=document.createElement('dialog');d.id='rental-dialog';d.setAttribute('aria-labelledby','rental-dialog-title');document.body.append(d);d.addEventListener('cancel',event=>{if(writeController)event.preventDefault();else{dialogContext=null;d.innerHTML='';trigger?.focus();}});}
  dialogContext=state;d.innerHTML=`<form id="rental-form"><header class="dialog-header"><div><span class="eyebrow">HAMDEE RENTAL REGISTER</span><h2 id="rental-dialog-title">${title}</h2></div><button type="button" class="icon-button" data-rental-action="close" aria-label="Close rental dialog">×</button></header><div class="rental-dialog-body">${body}</div><p id="rental-error" role="alert" tabindex="-1"></p><footer id="dialog-footer"><button type="button" class="button subtle" data-rental-action="close">${state?'Cancel':'Close'}</button>${state?'<button type="submit" class="button primary" id="rental-save">Save record</button>':''}</footer></form>`;d.showModal();
 }
-document.addEventListener('click',event=>{const button=event.target.closest('[data-rental-action]');if(!button)return;if(button.dataset.rentalAction==='close'){if(writeController)return;const trigger=dialogContext?.trigger;modal()?.close();if(modal())modal().innerHTML='';dialogContext=null;trigger?.focus();return;}open(button.dataset.rentalAction,button.dataset.id,button);});
+async function verifySession(button){
+ const state=dialogContext;if(!state||writeController||state.verifying||!alive(state.c))return;
+ const form=modal()?.querySelector('form'),save=form?.querySelector('#rental-save'),error=form?.querySelector('#rental-error');if(!form||!save||!error)return;
+ state.verifying=true;button.disabled=true;save.disabled=true;form.setAttribute('aria-busy','true');error.textContent='Verifying session…';
+ try{
+  const verified=await state.c.verifyAccess();if(dialogContext!==state||!alive(state.c)||!verified)return;
+  state.requiresVerification=false;button.remove();error.textContent='Session verified. Review your draft, then save explicitly.';error.focus();
+ }catch(cause){
+  if(dialogContext!==state||!alive(state.c))return;
+  if(cause.status===401||cause.code==='OWNER_ACCESS_DENIED'){await state.c.onAccessLoss(cause);return;}
+  error.textContent=cause.message+' Your draft is retained. Verify session to retry.';error.focus();
+ }finally{if(dialogContext===state&&alive(state.c)){state.verifying=false;button.disabled=false;save.disabled=Boolean(state.requiresVerification);form.setAttribute('aria-busy','false');}}
+}
+document.addEventListener('click',event=>{const button=event.target.closest('[data-rental-action]');if(!button)return;if(button.dataset.rentalAction==='verify-session'){void verifySession(button);return;}if(button.dataset.rentalAction==='close'){if(writeController)return;const trigger=dialogContext?.trigger;modal()?.close();if(modal())modal().innerHTML='';dialogContext=null;trigger?.focus();return;}open(button.dataset.rentalAction,button.dataset.id,button);});
 document.addEventListener('submit',async event=>{
  if(event.target.matches('[data-rental-filter]')){event.preventDefault();if(!context||!alive(context))return;const c=context;report={...report,...Object.fromEntries(new FormData(event.target))};if(c.dashboard){await renderRentalDashboard(c.target,c);if(context&&alive(context))await c.onReportChange?.(rentalReportPeriod());}else await renderRental(c.target,c);return;}
- if(event.target.id!=='rental-form')return;event.preventDefault();const state=dialogContext;if(!state||writeController||!alive(state.c))return;
+ if(event.target.id!=='rental-form')return;event.preventDefault();const state=dialogContext;if(!state||writeController||state.verifying||state.requiresVerification||!alive(state.c))return;
  let body={action:state.action,...state.hidden,...Object.fromEntries(new FormData(event.target))};
  if(body.action==='create-agreement'){body.endDate=body.endDate||null;}
  if(body.action==='record-collection'){body.allocations=body.kind==='rent'&&body.method!=='cheque'?[{dueId:body.dueId,amount:body.amount}]:[];delete body.dueId;}
@@ -82,6 +95,11 @@ document.addEventListener('submit',async event=>{
  try{await state.c.api.rentalWrite(body,state.pending.key,controller.signal);if(dialogContext!==state||!alive(state.c)||controller.signal.aborted||!await state.c.verifyAccess()||!alive(state.c))return;
   writeController=null;modal().close();modal().innerHTML='';dialogContext=null;document.querySelector('#feedback').textContent='Rental record saved.';await renderRental(state.c.target,state.c);
  }catch(cause){if(dialogContext!==state||!alive(state.c)||controller.signal.aborted)return;if(cause.status===401||cause.code==='MFA_REQUIRED'||cause.code==='OWNER_ACCESS_DENIED'){await state.c.onAccessLoss(cause);return;}
-  state.pending.uncertain=Boolean(cause.uncertain);event.target.querySelectorAll('input,select').forEach(input=>input.disabled=state.pending.uncertain);error.textContent=cause.message+(state.pending.uncertain?' Retry Save record to confirm the same submission.':'');error.focus();
- }finally{if(writeController===controller)writeController=null;if(button.isConnected)button.disabled=false;}
+  state.pending.uncertain=state.pending.uncertain||Boolean(cause.uncertain);event.target.querySelectorAll('input,select').forEach(input=>input.disabled=state.pending.uncertain);error.textContent=cause.message+(state.pending.uncertain?' Retry Save record to confirm the same submission.':'');
+  if(cause.code==='CSRF_REJECTED'){
+   state.requiresVerification=true;error.textContent+=' Verify session, review your retained draft, then save explicitly.';
+   let verify=modal().querySelector('[data-rental-action="verify-session"]');if(!verify){verify=document.createElement('button');verify.type='button';verify.className='button subtle';verify.dataset.rentalAction='verify-session';verify.textContent='Verify session';button.before(verify);}
+  }
+  error.focus();
+ }finally{if(writeController===controller)writeController=null;if(button.isConnected)button.disabled=Boolean(state.requiresVerification||state.verifying);}
 });

@@ -109,3 +109,63 @@ test('Rental UI QA: duplicate code and failed save retain input; logout clears p
   await expect(page.getByRole('cell', { name: 'QA-DUP', exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
 });
+
+test('Rental CSRF recovery: expired proof preserves collection draft and requires Verify session then explicit Save', async ({ page }, info) => {
+  await login(page);await prepareRoomAgreement(page);
+  const d=await open(page,'Collect rent');await d.getByLabel('Payment method',{exact:true}).selectOption('cash');await d.getByLabel('Amount',{exact:true}).fill('25.00');await d.getByLabel('Received date',{exact:true}).fill('2026-10-10');await d.getByLabel('Reference (optional)',{exact:true}).fill('SYNTHETIC-CSRF-RECOVERY');
+  const draft=await d.locator('form').evaluate(form=>Object.fromEntries(new FormData(form as HTMLFormElement)));
+  const writes:{body:unknown;key:string;csrf:string}[]=[];
+  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/hamdee/v1/rental'){const headers=request.headers();writes.push({body:request.postDataJSON(),key:headers['idempotency-key'],csrf:headers['x-hamdee-csrf']});}});
+  server.fixture.clock.advance(61_000);
+  await d.getByRole('button',{name:'Save record',exact:true}).click();
+  await expect(d.getByRole('button',{name:'Verify session',exact:true})).toBeVisible();
+  expect(await d.locator('form').evaluate(form=>Object.fromEntries(new FormData(form as HTMLFormElement)))).toEqual(draft);expect(writes).toHaveLength(1);
+  await expect(d.getByRole('button',{name:'Save record',exact:true})).toBeDisabled();
+  await page.screenshot({path:`evidence/rental-qa/${info.project.name}-csrf-verify-action.png`,fullPage:true});
+  await d.getByRole('button',{name:'Verify session',exact:true}).click();await expect(d.locator('#rental-error')).toContainText('save explicitly');
+  expect(writes).toHaveLength(1);expect(await d.locator('form').evaluate(form=>Object.fromEntries(new FormData(form as HTMLFormElement)))).toEqual(draft);
+  await page.screenshot({path:`evidence/rental-qa/${info.project.name}-csrf-renewed-draft.png`,fullPage:true});
+  await save(d);
+  expect(writes).toHaveLength(2);expect(writes[1].body).toEqual(writes[0].body);expect(writes[1].key===writes[0].key).toBeTruthy();expect(writes[1].csrf!==writes[0].csrf).toBeTruthy();
+  await expect(page.getByRole('region',{name:'Collection register',exact:true}).getByRole('row').filter({hasText:'SYNTHETIC-CSRF-RECOVERY'})).toHaveCount(1);
+  await expect(page.getByRole('region',{name:'Monthly rent dues',exact:true})).toContainText('QAR 975.00');
+});
+
+test('Rental CSRF recovery: uncertain commit stays frozen across rejection and failed proof renewal',async({page})=>{
+  await login(page);await addProperty(page);const d=await open(page,'Add tenant');await d.getByLabel('Tenant name',{exact:true}).fill('Synthetic exact retry tenant');
+  const writes:{body:unknown;key:string}[]=[];let committed=false;
+  await page.route('**/api/hamdee/v1/rental',async route=>{
+    if(route.request().method()!=='POST'){await route.continue();return;}
+    writes.push({body:route.request().postDataJSON(),key:route.request().headers()['idempotency-key']});
+    if(!committed){const result=await route.fetch();expect(result.ok()).toBeTruthy();committed=true;await route.abort('failed');return;}
+    await route.continue();
+  });
+  await d.getByRole('button',{name:'Save record',exact:true}).click();await expect(d.locator('#rental-error')).toContainText('same submission');await expect(d.getByLabel('Tenant name',{exact:true})).toBeDisabled();
+  server.fixture.clock.advance(61_000);await d.getByRole('button',{name:'Save record',exact:true}).click();await expect(d.getByRole('button',{name:'Verify session',exact:true})).toBeVisible();await expect(d.getByLabel('Tenant name',{exact:true})).toBeDisabled();
+  let failRead=true;await page.route('**/api/hamdee/auth/state',async route=>{if(failRead){failRead=false;await route.abort('failed');}else await route.continue();});
+  await d.getByRole('button',{name:'Verify session',exact:true}).click();await expect(d.locator('#rental-error')).toContainText('draft is retained');await expect(d.getByRole('button',{name:'Save record',exact:true})).toBeDisabled();expect(writes).toHaveLength(2);
+  await d.getByRole('button',{name:'Verify session',exact:true}).click();await expect(d.locator('#rental-error')).toContainText('save explicitly');await expect(d.getByLabel('Tenant name',{exact:true})).toBeDisabled();expect(writes).toHaveLength(2);
+  await save(d);expect(writes).toHaveLength(3);expect(writes.every(write=>write.key===writes[0].key)).toBeTruthy();expect(writes.map(write=>write.body)).toEqual([writes[0].body,writes[0].body,writes[0].body]);
+  await expect(page.getByRole('region',{name:'Tenant register',exact:true}).getByRole('row').filter({hasText:'Synthetic exact retry tenant'})).toHaveCount(1);
+});
+
+test('Rental CSRF recovery: logout wins over delayed proof and cannot restore a protected draft',async({page})=>{
+  await login(page);await addProperty(page);const d=await open(page,'Add room');await d.getByLabel('Room code',{exact:true}).fill('SYNTHETIC-LATE-PROOF');
+  let writes=0;await page.route('**/api/hamdee/v1/rental',async route=>{if(route.request().method()==='POST'){writes++;await route.fulfill({status:403,json:{error:{code:'CSRF_REJECTED',message:'Verify session before retrying.'}}});}else await route.continue();});
+  await d.getByRole('button',{name:'Save record',exact:true}).click();await expect(d.getByRole('button',{name:'Verify session',exact:true})).toBeVisible();
+  let release!:()=>void,entered!:()=>void,delivered!:()=>void;const hold=new Promise<void>(resolve=>{release=resolve;}),ready=new Promise<void>(resolve=>{entered=resolve;}),settled=new Promise<void>(resolve=>{delivered=resolve;});let delayed=false;
+  await page.route('**/api/hamdee/auth/state',async route=>{
+    if(delayed){await route.continue();return;}delayed=true;
+    const response=await route.fetch();entered();await hold;
+    // Logout aborts this stale read. Delivery may therefore be rejected by the
+    // browser; either outcome must leave the cleared UI signed out.
+    try{await route.fulfill({response});}catch{/* Expected for an aborted stale read. */}finally{delivered();}
+  });
+  await d.getByRole('button',{name:'Verify session',exact:true}).click();await ready;await expect(d.getByRole('button',{name:'Save record',exact:true})).toBeDisabled();
+  const second=await page.context().newPage();
+  try{
+    await second.goto(server.url+'/workspace/index.html#dashboard');await expect(second.getByRole('heading',{name:'Property overview',exact:true})).toBeVisible();await second.getByRole('button',{name:'Sign out',exact:true}).click();await expect(second.getByLabel('Email',{exact:true})).toBeVisible();
+    await page.evaluate(()=>{window.location.hash='dashboard';});await expect(page.getByLabel('Email',{exact:true})).toBeVisible();release();await settled;
+    await expect(d).not.toBeVisible();await expect(page.locator('body')).not.toContainText('SYNTHETIC-LATE-PROOF');expect(writes).toBe(1);await page.reload();await expect(page.getByLabel('Email',{exact:true})).toBeVisible();
+  }finally{release();await second.close();}
+});
