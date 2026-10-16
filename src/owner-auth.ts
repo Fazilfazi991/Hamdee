@@ -29,7 +29,11 @@ export interface OwnerManagedProvider {
   enrollTotp(tokens:OwnerTokenPair):Promise<Readonly<{session:OwnerProviderSession;factorId:string;qrCode:string}>>;
   verifyTotp(tokens:OwnerTokenPair,factorId:string,code:string):Promise<OwnerProviderSession>;
   /** Global managed sign-out. Failure must never be reported as confirmed. */
-  signOut(tokens:OwnerTokenPair):Promise<void>;
+  signOut(tokens:OwnerTokenPair,binding?:OwnerSignOutBinding):Promise<void>;
+}
+/** Trusted server binding from the sealed owner cookie, never client claims. */
+export interface OwnerSignOutBinding {
+  readonly identity:Identity;readonly sessionId:string;readonly passwordAuthenticatedAt:number;
 }
 export interface ManagedOwnerProviderOptions {
   readonly supabaseUrl:string;
@@ -174,10 +178,21 @@ export function createManagedOwnerProvider(options:ManagedOwnerProviderOptions):
     verifyTotp(tokens,factorId,code){const captured=pair(tokens);return guarded(async()=>{const c=client();await refresh(c,captured);
       const r=await c.auth.mfa.challengeAndVerify({factorId,code});if(r.error)providerError(r.error,true);
       ownerRequire(r.data,403,'MFA_REQUIRED');return verified(c,{accessToken:r.data.access_token,refreshToken:r.data.refresh_token});},true);},
-    signOut(tokens){const captured=pair(tokens);return guarded(async()=>{
+    signOut(tokens,expected){const captured=pair(tokens),binding=expected?detached(expected):undefined;return guarded(async()=>{
       // The convenience auth.signOut swallows401/403/404. This SDK method uses
       // the supplied USER JWT, not an admin/service key, and retains errors.
-      const r=await client().auth.admin.signOut(captured.accessToken,'global');if(r.error)throw ownerError(503,'SIGN_OUT_UNCONFIRMED');
+      const c=client();let r=await c.auth.admin.signOut(captured.accessToken,'global');
+      // A sealed cookie can outlive its access JWT. A rejected JWT is not
+      // confirmed revocation: refresh/verify the managed session, then retry
+      // once with its current JWT within the SAME bounded client/deadline.
+      // Never swallow failures or retry other status codes as success.
+      if(r.error?.status===401&&binding){
+        const current=await refresh(c,captured);
+        ownerRequire(current.identity.issuer===binding.identity.issuer&&current.identity.subject===binding.identity.subject&&
+          current.sessionId===binding.sessionId&&current.passwordAuthenticatedAt===binding.passwordAuthenticatedAt,401,'UNAUTHENTICATED');
+        r=await c.auth.admin.signOut(current.tokens.accessToken,'global');
+      }
+      if(r.error)throw ownerError(503,'SIGN_OUT_UNCONFIRMED');
     });}
   });
 }
@@ -370,7 +385,7 @@ export function createOwnerAuth(options:OwnerAuthOptions):OwnerAuthController {
           if(action==='recovery')ownerRequire(email(b.email),422,'VALIDATION_FAILED');
           clearing=true;
           if(present){
-            try{await call(()=>provider.signOut(present.tokens));}catch{await event(action==='logout'?'logout':'recovery_prepared',requestId,'unconfirmed');throw ownerError(503,'SIGN_OUT_UNCONFIRMED');}
+            try{await call(()=>provider.signOut(present.tokens,{identity:p.owner,sessionId:present.sessionId,passwordAuthenticatedAt:present.passwordAuthenticatedAt}));}catch{await event(action==='logout'?'logout':'recovery_prepared',requestId,'unconfirmed');throw ownerError(503,'SIGN_OUT_UNCONFIRMED');}
           }
           await event(action==='logout'?'logout':'recovery_prepared',requestId);
           const out=transport(new Request(req.url),null,null,action==='recovery'?'recovery_pending':'anonymous');
