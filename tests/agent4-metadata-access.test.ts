@@ -65,7 +65,7 @@ async function propertyHarness(t: TestContext, role: QaRole = 'admin', portfolio
   };
   return { h, issued, request, seedProperty, assign, actorId, assignment, db: () => pg, reopen };
 }
-const version = (id: unknown, value: number) => ({ 'If-Match': `"property:${id}:${value}"`, 'Idempotency-Key': randomUUID() });
+const version = (id: unknown, value: number) => ({ 'X-Hamdee-Property-Revision': `"property:${id}:${value}"`, 'Idempotency-Key': randomUUID() });
 async function expectStatus(response: Response, status: number) {
   const result = await response.json(); assert.equal(response.status, status, JSON.stringify(result)); return result;
 }

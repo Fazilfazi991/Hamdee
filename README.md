@@ -104,7 +104,7 @@ The existing nonsecret project/development pins remain in source. Do not enable 
 
 ## API and security boundary
 
-Auth base: `/api/hamdee/auth`, with state, email/password login, refresh, logout and recovery-preparation endpoints; TOTP endpoints are inactive. Protected metadata base: `/api/hamdee/v1`, with session, dashboard and existing property commands/history. Success uses `{data,requestId}`; safe errors use `{error:{code,message},requestId}`. Property mutations retain UUID idempotency keys and ETag/If-Match revision checks.
+Auth base: `/api/hamdee/auth`, with state, email/password login, refresh, logout and recovery-preparation endpoints; TOTP endpoints are inactive. Protected metadata base: `/api/hamdee/v1`, with session, dashboard and existing property commands/history. Success uses `{data,requestId}`; safe errors use `{error:{code,message},requestId}`. Property mutations retain UUID idempotency keys and read ETags and `X-Hamdee-Property-Revision` write checks. The application revision header prevents intermediary conditional-response handling after a committed mutation; stale revisions still fail closed.
 
 Server checks pin trusted issuer, immutable owner ID and the configured confirmed mailbox, require verified password authentication and fresh enabled database Admin/portfolio membership, and enforce exact Origin/session-bound CSRF for unsafe requests. Raw provider credentials remain in authenticated-encryption HttpOnly cookies; browser JSON exposes safe auth state and CSRF only. Sign-in never creates or enables database membership.
 

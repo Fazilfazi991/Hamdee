@@ -73,7 +73,14 @@ export function createHandler(provider:IdentityProvider,service:PropertyService,
       requireThat(key&&uuid.test(key),400,'IDEMPOTENCY_KEY_REQUIRED','A valid operation key is required.');
       let expected:number|undefined;
       if(id){
-        const match=request.headers.get('if-match')?.match(/^"property:([^:]+):(\d+)"$/);
+        const revision=request.headers.get('x-hamdee-property-revision'),legacy=request.headers.get('if-match');
+        requireThat(!(revision!==null&&legacy!==null),400,'AMBIGUOUS_REVISION','Submit one property revision header.');
+        // Standard conditional headers can be evaluated by an intermediary
+        // against the NEW response ETag after the mutation has committed.
+        // Legacy If-Match remains only for existing injected HTTP loopback tests;
+        // the deployable owner composition requires an exact HTTPS origin.
+        const loopback=url.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(url.hostname);
+        const match=(revision??(loopback?legacy:null))?.match(/^"property:([^:]+):(\d+)"$/);
         requireThat(match&&match[1]===id&&Number.isSafeInteger(Number(match[2]))&&Number(match[2])>0,428,'PRECONDITION_REQUIRED','A current property revision is required.');expected=Number(match[2]);
       }
       const body=await readJson(request);

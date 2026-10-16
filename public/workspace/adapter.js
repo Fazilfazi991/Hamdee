@@ -34,6 +34,6 @@ export class PropertyApi {
   get(id,signal){return this.request('/properties/'+encodeURIComponent(id),{signal});}
   audit(id,cursor='',signal){return this.request('/properties/'+encodeURIComponent(id)+'/audit?limit=50&cursor='+cursor,{signal});}
   mutate(action,id,body,key,version,signal){return this.request('/properties'+(id?'/'+encodeURIComponent(id):'')+(['archive','restore'].includes(action)?'/'+action:''),{
-    method:action==='update'?'PATCH':'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{}),...(id?{'If-Match':`"property:${id}:${version}"`}:{})},body:JSON.stringify(body)
+    method:action==='update'?'PATCH':'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{}),...(id?{'X-Hamdee-Property-Revision':`"property:${id}:${version}"`}:{})},body:JSON.stringify(body)
   });}
 }
