@@ -43,11 +43,17 @@ export function createOwnerApplication(options:OwnerApplicationOptions):OwnerApp
     },
     async handleProperties(request){
       try{
-        let current=await auth.authorize(request);
+        // Authorization does not consume a command body. Avoid an unread tee
+        // that would block cancellation when the body-size guard rejects it.
+        const authorizationRequest=new Request(request.url,{method:request.method,headers:new Headers(request.headers)});
+        let current=await auth.authorize(authorizationRequest);
         function currentRequest():Request {
           const headers=new Headers(request.headers),jar=new Map<string,string>();
           for(const f of (headers.get('cookie')??'').split(';')){const i=f.indexOf('=');if(i>0)jar.set(f.slice(0,i).trim(),f.slice(i+1).trim());}
-          for(const line of current.setCookies){const first=line.split(';')[0],i=first.indexOf('=');jar.set(first.slice(0,i),first.slice(i+1));}
+          // Recheck the original refresh token at every live provider gate.
+          // Active-parent reuse keeps this request's repeated checks on the
+          // current child; the final response still carries the latest cookies.
+          for(const line of current.setCookies){const first=line.split(';')[0],i=first.indexOf('=');if(first.slice(0,i)!=='hamdee_owner')jar.set(first.slice(0,i),first.slice(i+1));}
           headers.set('cookie',[...jar].map(([k,v])=>k+'='+v).join('; '));
           headers.set('x-hamdee-csrf',current.state.csrfToken);
           return new Request(request.url,{method:request.method,headers});
