@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { IdentityProvider } from './auth';
+import type { Identity,IdentityProvider } from './auth';
 import { PropertyService, safeUnexpected } from './service';
 import { ApiError, requireThat } from './errors';
 import { uuid } from './validation';
@@ -7,13 +7,25 @@ import { securityLogger,logSafely,type SecurityLogger } from './security-log';
 import { RentalService } from './rental';
 import { ExpenseService } from './expenses';
 const base='/api/hamdee/v1';
+/** Trusted server compositions only. Each module keeps its financial validation,
+ * transaction, audit and command replay inside the existing owner context. */
+export interface OperationsApiService {
+  overview(identity:Identity,query:{month:string;asOf:string;collectorId?:string;accountId?:string}):Promise<unknown>;
+  receipts?(identity:Identity,query:{asOf:string;propertyId?:string;cursor?:string}):Promise<unknown>;
+  mutate(identity:Identity,input:unknown,key:string,requestId:string):Promise<unknown>;
+}
+export interface OperationsApiServices {
+  readonly staffCollections?:OperationsApiService;
+  readonly companyFinance?:OperationsApiService;
+  readonly carRentals?:OperationsApiService;
+}
 async function readJson(request:Request):Promise<unknown> {
   requireThat(request.headers.get('content-type')?.split(';')[0]==='application/json',415,'JSON_REQUIRED','Submit JSON metadata.');
   const reader=request.body?.getReader();let length=0;const chunks:Uint8Array[]=[];
   if(reader){while(true){const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>16384){await reader.cancel();throw new ApiError(413,'PAYLOAD_TOO_LARGE','The submission is too large.');}chunks.push(value);}}
   try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new ApiError(400,'INVALID_JSON','Submit valid JSON metadata.');}
 }
-export function createHandler(provider:IdentityProvider,service:PropertyService,logger:SecurityLogger=securityLogger) {
+export function createHandler(provider:IdentityProvider,service:PropertyService,logger:SecurityLogger=securityLogger,operations:OperationsApiServices={}) {
   return async function handle(request:Request):Promise<Response> {
     const requestId=randomUUID();
     const headers:Record<string,string>={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','X-Request-Id':requestId};
@@ -26,6 +38,40 @@ export function createHandler(provider:IdentityProvider,service:PropertyService,
       requireThat(url.pathname===base||url.pathname.startsWith(base+'/'),404,'NOT_FOUND','Endpoint not found.');
       const path=url.pathname.slice(base.length).replace(/\/$/,'');
       if(path==='/session'&&request.method==='GET') return json({data:{...session,authenticationProvider:provider.kind||'server-validated'}});
+      const moduleName=path.split('/')[1];
+      const modules:Record<string,keyof OperationsApiServices>={'staff-collections':'staffCollections','company-finance':'companyFinance','car-rentals':'carRentals'};
+      if(Object.hasOwn(modules,moduleName)){
+        const modulePath='/'+moduleName,isCommand=path===modulePath+'/commands',isReceipts=moduleName==='staff-collections'&&path===modulePath+'/receipts';
+        requireThat(path===modulePath||isCommand||isReceipts,404,'NOT_FOUND','Endpoint not found.');
+        // No staff identities or additional roles: these APIs require the same
+        // current full owner portfolio grant before request fields are parsed.
+        await service.ownerContext(identity,async()=>{});
+        requireThat(request.method===(isCommand?'POST':'GET'),405,'METHOD_NOT_ALLOWED','This method is unavailable.');
+        const module=operations[modules[moduleName]];
+        if(!isCommand){
+          const filter=isReceipts?'propertyId':moduleName==='staff-collections'?'collectorId':moduleName==='company-finance'?'accountId':null;
+          const allowed=isReceipts?['asOf','propertyId','cursor']:['month','asOf',...(filter?[filter]:[])];
+          requireThat([...url.searchParams.keys()].every(k=>allowed.includes(k)&&url.searchParams.getAll(k).length===1),400,'INVALID_QUERY','Check the reporting filters.');
+          const asOf=url.searchParams.get('asOf')??'',month=url.searchParams.get('month')??'',selected=filter?url.searchParams.get(filter):null;
+          const cursor=isReceipts?url.searchParams.get('cursor'):null;
+          requireThat(/^(19|[2-9]\d)\d{2}-\d{2}-\d{2}$/.test(asOf)&&Number.isFinite(Date.parse(asOf))&&new Date(asOf).toISOString().slice(0,10)===asOf&&
+            (isReceipts||/^(19|[2-9]\d)\d{2}-(0[1-9]|1[0-2])$/.test(month))&&(selected===null||uuid.test(selected))&&
+            (cursor===null||/^[A-Za-z0-9_-]{1,512}$/.test(cursor)),400,'INVALID_QUERY','Choose valid reporting dates and record filters.');
+          requireThat(module,503,'CONFIGURATION_UNAVAILABLE','The requested operational module is unavailable.');
+          if(isReceipts){
+            requireThat(module.receipts,503,'CONFIGURATION_UNAVAILABLE','The requested operational module is unavailable.');
+            return json({data:await module.receipts(identity,{asOf,...(selected?{propertyId:selected}:{}),...(cursor?{cursor}:{})})});
+          }
+          return json({data:await module.overview(identity,{month,asOf,...(selected&&filter?{[filter]:selected}:{})})});
+        }
+        requireThat([...url.searchParams.keys()].length===0,400,'INVALID_QUERY','Command requests do not accept query filters.');
+        requireThat(request.headers.get('origin')===url.origin,403,'ORIGIN_REJECTED','This request origin is not permitted.');
+        const key=request.headers.get('idempotency-key');requireThat(key&&uuid.test(key),400,'IDEMPOTENCY_KEY_REQUIRED','A valid operation key is required.');
+        requireThat(module,503,'CONFIGURATION_UNAVAILABLE','The requested operational module is unavailable.');
+        const result=await module.mutate(identity,await readJson(request),key,requestId);
+        requireThat(result&&typeof result==='object'&&!Array.isArray(result)&&'data' in result&&'replay' in result&&typeof result.replay==='boolean',503,'CONFIGURATION_UNAVAILABLE','The requested operational module is unavailable.');
+        return json(result,200,result.replay?{'Idempotent-Replay':'true'}:{});
+      }
       if(path==='/rental'||path==='/expenses'){
         const rental=path==='/rental'?new RentalService(service):new ExpenseService(service);
         if(request.method==='GET'){

@@ -2,17 +2,21 @@ import { LocalPostgresDatabase,type Database } from './database';
 import { HostedPostgresDatabase,reviewedHostedDatabasePins } from './hosted-database';
 import { createOwnerAuth,createManagedOwnerProvider,type OwnerAuthOptions,type OwnerAuthorization,type OwnerAuthFlow } from './owner-auth';
 import type { SecurityLogger } from './security-log';
-import { createHandler,unavailable } from './http';
+import { createHandler,unavailable,type OperationsApiServices } from './http';
 import { bindIdentityRecheck } from './auth';
 import { requireThat } from './errors';
 import { PropertyService,safeUnexpected } from './service';
 import { randomBytes,randomUUID } from 'node:crypto';
 import { uuid } from './validation';
+import { StaffCollectionsService } from './staff-collections';
+import { CompanyFinanceService } from './company-finance';
 
 export interface OwnerApplicationOptions extends OwnerAuthOptions {
   readonly database:Database;
   readonly logger?:SecurityLogger;
   readonly databaseEnvironment?:'local-test'|'synthetic-development';
+  /** Trusted server-only module registration; never selected by client/env flags. */
+  readonly operationsFactory?:(properties:PropertyService)=>OperationsApiServices;
 }
 export interface OwnerApplication {
   handleAuth(request:Request):Promise<Response>;
@@ -23,6 +27,11 @@ export interface OwnerApplication {
 export function createOwnerApplication(options:OwnerApplicationOptions):OwnerApplication {
   const auth=createOwnerAuth(options),owner=Object.freeze({...options.policy.owner}),logger=options.logger,
     service=new PropertyService({transaction:options.database.transaction.bind(options.database)},owner,options.databaseEnvironment);
+  // Construction does not query the optional operations schema. Existing auth
+  // and property activation remain independent of local migration 006.
+  const operations=options.operationsFactory?.(service)??{
+    staffCollections:new StaffCollectionsService(service),companyFinance:new CompanyFinanceService(service)
+  };
   const cookieFlags=`Path=/; HttpOnly; SameSite=Strict${options.policy.cookieSecure?'; Secure':''}; Max-Age=0`;
   const clear=[`hamdee_owner=; ${cookieFlags}`,`hamdee_csrf=; ${cookieFlags}`];
   function failed(error:unknown,erase=false):Response {
@@ -43,16 +52,15 @@ export function createOwnerApplication(options:OwnerApplicationOptions):OwnerApp
     },
     async handleProperties(request){
       try{
-        // Authorization does not consume a command body. Avoid an unread tee
-        // that would block cancellation when the body-size guard rejects it.
+        // Authorization reads only URL/method/headers. Do not tee the command
+        // body: an unread authorization clone can block body-limit cancellation.
         const authorizationRequest=new Request(request.url,{method:request.method,headers:new Headers(request.headers)});
         let current=await auth.authorize(authorizationRequest);
         function currentRequest():Request {
           const headers=new Headers(request.headers),jar=new Map<string,string>();
           for(const f of (headers.get('cookie')??'').split(';')){const i=f.indexOf('=');if(i>0)jar.set(f.slice(0,i).trim(),f.slice(i+1).trim());}
-          // Recheck the original refresh token at every live provider gate.
-          // Active-parent reuse keeps this request's repeated checks on the
-          // current child; the final response still carries the latest cookies.
+          // Keep the same approved delivery repair: each live recheck uses the
+          // original owner token; only CSRF updates propagate within the request.
           for(const line of current.setCookies){const first=line.split(';')[0],i=first.indexOf('=');if(first.slice(0,i)!=='hamdee_owner')jar.set(first.slice(0,i),first.slice(i+1));}
           headers.set('cookie',[...jar].map(([k,v])=>k+'='+v).join('; '));
           headers.set('x-hamdee-csrf',current.state.csrfToken);
@@ -64,7 +72,7 @@ export function createOwnerApplication(options:OwnerApplicationOptions):OwnerApp
             401,'UNAUTHENTICATED','Sign in with an authorized account.');current=next;
         });
         const provider={kind:'managed-supabase-owner',validate:async()=>identity};
-        const response=await createHandler(provider,service,logger)(request);
+        const response=await createHandler(provider,service,logger,operations)(request);
         return withCookies(response,response.status===401?clear:current.setCookies);
       }catch(error){return failed(error);}
     }

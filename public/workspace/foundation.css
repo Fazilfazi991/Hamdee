@@ -17,3 +17,10 @@ dialog[open],dialog.drawer[open]{animation:none!important}.button{transition:non
 
 /* Wrapped owner controls stay inside the existing mobile header. */
 .empty>.button{margin-top:16px}
+
+/* Existing HAMDEE paper panels, no new motion. */
+.operations-unavailable .panel-body{padding-top:0;font-size:12px;color:var(--muted);line-height:1.7}.operations-unavailable .panel-body p+p{margin-top:12px}
+#staff-dialog{width:min(700px,calc(100vw - 32px));max-height:calc(100dvh - 32px)}#staff-dialog .dialog-header h2{font-size:22px}#staff-error{padding:0 24px;color:var(--rose);font-size:12px;overflow-wrap:anywhere}#staff-error:empty{display:none}#staff-recovery:not(:empty){padding:12px 24px}.operations-confirmation{display:flex;align-items:flex-start;gap:12px;font-size:12px;line-height:1.6}.operations-confirmation input{width:20px;min-height:20px;flex-shrink:0;margin-top:2px}#staff-company-account{min-width:0}
+.operations-notice{padding:12px 20px;margin-top:12px;border:1px solid var(--rule);border-radius:var(--radius);background:var(--amber-wash);color:var(--amber);font-size:12px;line-height:1.6}#operations-workspace .panel-body{padding:0 20px 20px;font-size:12px;color:var(--muted);line-height:1.7}
+#staff-dialog [hidden]{display:none!important}
+#staff-receipt-page-error{font-size:12px;color:var(--rose);line-height:1.6}#staff-receipt-page-error:empty{display:none}#staff-receipt-paging{gap:8px;align-items:start}#staff-receipt-paging .button{justify-self:start;min-height:44px}#staff-receipt-list-status[hidden]{display:none}

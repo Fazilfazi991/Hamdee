@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { PGlite } from '@electric-sql/pglite';
 import { ApiError } from '../../src/errors';
 import type { Database } from '../../src/database';
-import { createOwnerApplication, type OwnerApplication } from '../../src/owner-runtime';
+import { createOwnerApplication, type OwnerApplication,type OwnerApplicationOptions } from '../../src/owner-runtime';
 import type { OwnerAuthAuditEvent, OwnerAuthOptions, OwnerManagedProvider, OwnerProviderSession, OwnerTokenPair } from '../../src/owner-auth';
 import { adapter, up } from './fixture';
 
@@ -206,6 +206,7 @@ export async function startOwnerNativeCluster(runtime: { bin: string; archiveSha
 }
 
 const assetPaths = new Set(['workspace/index.html', 'workspace/adapter.js', 'workspace/app.js', 'workspace/rental.js', 'workspace/expenses.js', 'workspace/foundation.css',
+  'workspace/staff-collections.js','workspace/company-finance.js','workspace/car-rentals.js',
   'shared/styles.css', 'shared/icons.js', 'shared/hamdee-logo.png', 'shared/inter-latin.woff2']);
 export type OwnerQaHttpHandler = (request: Request) => Promise<Response>;
 
@@ -335,13 +336,14 @@ export async function seedOwnerAppRecords(sql: { query: (text: string, values?: 
 
 export async function createOwnerQaFixture(config: { origin?: string; database?: Database; pg?: PGlite;
   databaseEnvironment?:'local-test'|'synthetic-development';
+  operationsFactory?:OwnerApplicationOptions['operationsFactory'];migrationFiles?:readonly string[];
   provider?: ReturnType<typeof ownerProviderFake>; clock?: ReturnType<typeof ownerQaClock>;
   timings?: Pick<OwnerAuthOptions['policy'], 'idleTimeoutMs' | 'absoluteTimeoutMs' | 'csrfLifetimeMs'> } = {}) {
   const inputs = ownerQaInputs(), clock = config.clock || ownerQaClock(inputs.time), fake = config.provider || ownerProviderFake(clock);
   const pg = config.database ? config.pg : config.pg || new PGlite();
   let member: { id: string; assignment: string } | undefined;
   if (!config.database) {
-    assert.ok(pg); await pg.exec(await up()); member = await seedOwnerAppRecords(pg);
+    assert.ok(pg); await pg.exec(await up(config.migrationFiles)); member = await seedOwnerAppRecords(pg);
   }
   const database = config.database || adapter(pg!);
   const audit: OwnerAuthAuditEvent[] = [];
@@ -356,7 +358,7 @@ export async function createOwnerQaFixture(config: { origin?: string; database?:
     audit: { async append(event) { if (!hooks.auditAvailable) throw new Error('SYNTHETIC_AUDIT_FAILURE'); audit.push(structuredClone(event)); } }
   };
   const guardedDb: Database = { transaction(work) { if (!hooks.databaseAvailable) return Promise.reject(new Error('SYNTHETIC_DATABASE_FAILURE')); return database.transaction(work); } };
-  let app: OwnerApplication = createOwnerApplication({ ...options, database: guardedDb, databaseEnvironment:config.databaseEnvironment, logger: () => {} });
+  let app: OwnerApplication = createOwnerApplication({ ...options, database: guardedDb, databaseEnvironment:config.databaseEnvironment,operationsFactory:config.operationsFactory, logger: () => {} });
   const jar = new OwnerCookieJar();
   const request = async (method: string, route: string, body?: unknown, extra: Record<string, string> = {}, cookies = jar) => {
     const request = new Request(options.policy.origin + route, { method,
@@ -374,16 +376,16 @@ export async function createOwnerQaFixture(config: { origin?: string; database?:
     return jar;
   };
   return { inputs, options, fake, clock, jar, audit, hooks, pg, member, database, request, auth, login,
-    app: () => app, rebuildApplication: () => { app = createOwnerApplication({ ...options, database: guardedDb, databaseEnvironment:config.databaseEnvironment, logger: () => {} }); },
+    app: () => app, rebuildApplication: () => { app = createOwnerApplication({ ...options, database: guardedDb, databaseEnvironment:config.databaseEnvironment,operationsFactory:config.operationsFactory, logger: () => {} }); },
     close: async () => { if (!config.database) await pg?.close(); } };
 }
 
-export async function startOwnerBrowserHarness() {
+export async function startOwnerBrowserHarness(config:Pick<NonNullable<Parameters<typeof createOwnerQaFixture>[0]>,'operationsFactory'|'migrationFiles'>={}) {
   let fixture!: Awaited<ReturnType<typeof createOwnerQaFixture>>;
   const server = await startOwnerLoopbackHarness(fileURLToPath(new URL('../../public/', import.meta.url)), async origin => {
     let offset = 0;
     const clock = { now: () => Date.now() + offset, advance: (milliseconds: number) => { assert.ok(Number.isSafeInteger(milliseconds) && milliseconds >= 0); offset += milliseconds; } };
-    fixture = await createOwnerQaFixture({ origin, clock,
+    fixture = await createOwnerQaFixture({ ...config,origin, clock,
       timings: { idleTimeoutMs: 120_000, absoluteTimeoutMs: 600_000, csrfLifetimeMs: 60_000 } });
     return request => new URL(request.url).pathname.startsWith('/api/hamdee/auth/') ? fixture.app().handleAuth(request) : fixture.app().handleProperties(request);
   });

@@ -26,6 +26,11 @@ export class PropertyApi {
   }
   session(signal){return this.request('/session',{signal});}
   dashboard(signal){return this.request('/dashboard',{signal});}
+  staffRead(filters,signal){return this.request('/staff-collections?'+new URLSearchParams(filters),{signal});}
+  staffReceipts(filters,signal){return this.request('/staff-collections/receipts?'+new URLSearchParams(filters),{signal});}
+  staffWrite(body,key,signal){return this.request('/staff-collections/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
+  financeRead(filters,signal){return this.request('/company-finance?'+new URLSearchParams(filters),{signal});}
+  financeWrite(body,key,signal){return this.request('/company-finance/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   rentalRead(filters,signal){return this.request('/rental?'+new URLSearchParams(filters),{signal});}
   expenseRead(filters,signal){return this.request('/expenses?'+new URLSearchParams(filters),{signal});}
   expenseWrite(body,key,signal){return this.request('/expenses',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}

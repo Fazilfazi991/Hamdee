@@ -8,7 +8,12 @@ import { ApiError } from '../../src/errors';
 import { PropertyService } from '../../src/service';
 import { createHandler } from '../../src/http';
 export const issuer='https://isolated-hamdee-tests.invalid/auth/v1';
-export const up=async()=>(await Promise.all(['001_property_foundation.up.sql','002_property_hardening.up.sql','003_local_rental_operations.up.sql','004_local_property_expenses.up.sql'].map(file=>readFile(new URL('../../migrations/'+file,import.meta.url),'utf8')))).join('\n');
+export const up=async(additionalMigrations:readonly string[]=[])=>{
+  if(!additionalMigrations.every(file=>/^\d{3}_[a-z0-9_]+\.up\.sql$/.test(file)))throw new Error('Use a local migration basename.');
+  const files=['001_property_foundation.up.sql','002_property_hardening.up.sql','003_local_rental_operations.up.sql','004_local_property_expenses.up.sql',...additionalMigrations];
+  if(new Set(files).size!==files.length)throw new Error('Local test migrations cannot be repeated.');
+  return (await Promise.all(files.map(file=>readFile(new URL('../../migrations/'+file,import.meta.url),'utf8')))).join('\n');
+};
 // This provider exists only in automated tests. No environment variable,
 // production route or build import can activate it.
 export class TestIdentityProvider implements IdentityProvider {
