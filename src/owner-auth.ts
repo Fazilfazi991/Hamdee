@@ -23,8 +23,8 @@ export interface OwnerProviderSession {
 }
 export interface OwnerManagedProvider {
   signIn(email:string,password:string):Promise<OwnerProviderSession>;
-  /** Mandatory managed refresh/revocation gate on EVERY cookie-authenticated
-   * request. getUser/getClaims or a locally valid JWT alone do not satisfy it. */
+  /** Live managed-user/session verification on every cookie-authenticated
+   * request; rotate tokens only when their access JWT needs renewal. */
   verifySession(tokens:OwnerTokenPair):Promise<OwnerProviderSession>;
   enrollTotp(tokens:OwnerTokenPair):Promise<Readonly<{session:OwnerProviderSession;factorId:string;qrCode:string}>>;
   verifyTotp(tokens:OwnerTokenPair,factorId:string,code:string):Promise<OwnerProviderSession>;
@@ -169,7 +169,18 @@ export function createManagedOwnerProvider(options:ManagedOwnerProviderOptions):
   return Object.freeze<OwnerManagedProvider>({
     signIn(email,password){return guarded(async()=>{const c=client(),r=await c.auth.signInWithPassword({email,password});if(r.error)providerError(r.error);
       ownerRequire(r.data.session,401,'UNAUTHENTICATED');return verified(c,{accessToken:r.data.session.access_token,refreshToken:r.data.session.refresh_token});});},
-    verifySession(tokens){const captured=pair(tokens);return guarded(()=>refresh(client(),captured));},
+    verifySession(tokens){const captured=pair(tokens);return guarded(async()=>{
+      // This decoded expiry only schedules renewal; it NEVER authorizes access.
+      // verified() still checks the signed claims and calls managed getUser(),
+      // which rejects a deleted/revoked session. Do not refresh on its errors.
+      let exp:unknown;
+      try{exp=(JSON.parse(Buffer.from(captured.accessToken.split('.')[1]??'','base64url').toString('utf8')) as {exp?:unknown}).exp;}
+      catch{throw ownerError(401,'UNAUTHENTICATED');}
+      ownerRequire(typeof exp==='number'&&Number.isSafeInteger(exp)&&exp>0,401,'UNAUTHENTICATED');
+      const c=client();
+      // Leave enough time for verification without changing idle/max lifetime.
+      return exp<=Math.floor(Date.now()/1000)+30?refresh(c,captured):verified(c,captured);
+    });},
     enrollTotp(tokens){const captured=pair(tokens);return guarded(async()=>{const c=client(),session=await refresh(c,captured);
       ownerRequire(!session.factors.some(f=>f.status==='verified'),409,'FACTOR_ALREADY_ENROLLED');
       const r=await c.auth.mfa.enroll({factorType:'totp',friendlyName:'HAMDEE Owner'});if(r.error)providerError(r.error,true);

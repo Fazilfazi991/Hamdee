@@ -209,10 +209,10 @@ function sdkTransport() {
   const user = () => ({ id: facts.wrongSubject ? OTHER_QA_SUBJECT : inputs.ownerSubject, aud: 'authenticated', role: 'authenticated',
     email: inputs.email, email_confirmed_at: facts.emailConfirmed ? new Date().toISOString() : null, is_anonymous: facts.anonymous, app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: { role: 'admin' },
     factors: facts.aal2 ? [{ id: factorId, factor_type: 'totp', status: 'verified', friendly_name: 'Synthetic TOTP' }] : [] });
-  const jwt = () => {
+  const jwt = (expiresIn=3600) => {
     const seconds = Math.floor(Date.now() / 1000), enc = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url');
     const content = enc({ typ: 'JWT', alg: 'RS256', kid: 'owner-qa-rsa' }) + '.' + enc({ iss: inputs.issuer, sub: user().id,
-      aud: 'authenticated', role: 'authenticated', iat: seconds, exp: seconds + 3600, session_id: sessionId,
+      aud: 'authenticated', role: 'authenticated', iat: seconds-120, exp: seconds + expiresIn, session_id: sessionId,
       email: inputs.email, aal: facts.aal2 ? 'aal2' : 'aal1', amr: [...(facts.passwordProof ? [{ method: 'password', timestamp: passwordTime }] : []), ...(facts.aal2 ? [{ method: 'totp', timestamp: seconds }] : [])], is_anonymous: facts.anonymous });
     const signature = sign('RSA-SHA256', Buffer.from(content), privateKey); if (facts.badSignature) signature[0] ^= 1;
     return content + '.' + signature.toString('base64url');
@@ -228,7 +228,8 @@ function sdkTransport() {
       if (facts.revoked) return Response.json({ error_code: 'refresh_token_not_found', msg: 'Synthetic revoked refresh' }, { status: 400 });
       return Response.json(session());
     }
-    if (url.pathname.endsWith('/user')) return Response.json(user());
+    if (url.pathname.endsWith('/user')) return facts.revoked
+      ?Response.json({code:'session_not_found',msg:'Synthetic managed session revoked'},{status:403}):Response.json(user());
     if (url.pathname.endsWith('/logout')) { facts.revoked = true; return new Response(null, { status: 204 }); }
     if (url.pathname.endsWith('/factors') && request.method === 'POST') return Response.json({ id: factorId, type: 'totp', totp: { qr_code: '<svg/>', secret: 'SYNTHETIC_ONLY', uri: 'otpauth://totp/Synthetic' } });
     if (url.pathname.endsWith('/factors')) return Response.json({ all: user().factors, totp: user().factors, phone: [] });
@@ -237,9 +238,9 @@ function sdkTransport() {
     throw new Error('Unexpected intercepted SDK endpoint: ' + url.pathname);
   };
   const provider = createManagedOwnerProvider({ supabaseUrl: 'https://' + inputs.projectRef + '.supabase.co', publishableKey: 'sb_publishable_SYNTHETIC_QA_ONLY', requestTimeoutMs: 3000, fetch: fetcher });
-  return { provider, facts, inputs, factorId };
+  return { provider, facts, inputs, factorId, expiringTokens:(expiresIn:number)=>({accessToken:jwt(expiresIn),refreshToken:'SYNTHETIC_SDK_REFRESH'}) };
 }
-test('Owner SDK QA: concrete password adapter refreshes signed claims without factor transport', async () => {
+test('Owner SDK QA: concrete password adapter verifies live signed claims without needless rotation or factor transport', async () => {
   const f = sdkTransport(); const primary = await f.provider.signIn(f.inputs.email, f.inputs.password);
   assert.equal(primary.identity.subject, f.inputs.ownerSubject); assert.equal(primary.assurance, 'aal1');
   assert.equal(primary.email, f.inputs.email); assert.equal(primary.emailConfirmed, true); assert.ok(primary.passwordAuthenticatedAt > 0);
@@ -247,9 +248,43 @@ test('Owner SDK QA: concrete password adapter refreshes signed claims without fa
   assert.equal(refreshed.assurance, 'aal1'); assert.equal(refreshed.passwordAuthenticatedAt, primary.passwordAuthenticatedAt);
   assert.deepEqual(refreshed.factors, []); assert.equal(refreshed.mfaVerifiedAt, null);
   assert.ok(f.facts.calls.some(call => call.includes('grant_type=password')));
-  assert.ok(f.facts.calls.some(call => call.includes('grant_type=refresh_token')));
+  assert.equal(f.facts.calls.some(call => call.includes('grant_type=refresh_token')),false);
   assert.ok(f.facts.calls.some(call => call.includes('/user')));
   assert.equal(f.facts.calls.some(call => call.includes('/factors')), false);
+});
+
+test('Owner SDK regression: concurrent navigation and repeated reads keep live verification without refresh-token races',async()=>{
+  const f=sdkTransport(),login=await f.provider.signIn(f.inputs.email,f.inputs.password);
+  for(let i=0;i<4;i++){
+    const results=await Promise.all(Array.from({length:8},()=>f.provider.verifySession(login.tokens)));
+    for(const r of results){assert.deepEqual(r.tokens,login.tokens);assert.equal(r.sessionId,login.sessionId);}
+  }
+  assert.equal(f.facts.calls.filter(c=>c.includes('grant_type=refresh_token')).length,0);
+  assert.equal(f.facts.calls.filter(c=>c.endsWith('/user')).length,33);
+  await f.provider.signOut(login.tokens);
+  await assert.rejects(()=>f.provider.verifySession(login.tokens),{code:'UNAUTHENTICATED'});
+  assert.equal(f.facts.calls.filter(c=>c.includes('grant_type=refresh_token')).length,0);
+});
+
+test('Owner SDK regression: expired and near-expiry JWTs renew once, then ordinary rechecks do not rotate again',async()=>{
+  for(const expiresIn of [-60,20]){
+    const f=sdkTransport(),login=await f.provider.signIn(f.inputs.email,f.inputs.password);
+    const renewed=await f.provider.verifySession(f.expiringTokens(expiresIn));
+    assert.equal(renewed.sessionId,login.sessionId);assert.equal(renewed.passwordAuthenticatedAt,login.passwordAuthenticatedAt);
+    await Promise.all(Array.from({length:4},()=>f.provider.verifySession(renewed.tokens)));
+    assert.equal(f.facts.calls.filter(c=>c.includes('grant_type=refresh_token')).length,1);
+  }
+});
+
+test('Owner SDK regression: invalid signatures and malformed expiry never authorize ordinary reads',async()=>{
+  const f=sdkTransport(),login=await f.provider.signIn(f.inputs.email,f.inputs.password);
+  const parts=login.tokens.accessToken.split('.');parts[2]=(parts[2][0]==='A'?'B':'A')+parts[2].slice(1);
+  await assert.rejects(()=>f.provider.verifySession({...login.tokens,accessToken:parts.join('.')}));
+  for(const exp of [null,'9999999999',-1,1.5]){
+    const bad='e30.'+Buffer.from(JSON.stringify({exp})).toString('base64url')+'.eA';
+    await assert.rejects(()=>f.provider.verifySession({...login.tokens,accessToken:bad}),{code:'UNAUTHENTICATED'});
+  }
+  assert.equal(f.facts.calls.filter(c=>c.includes('grant_type=refresh_token')).length,0);
 });
 test('Owner SDK QA: anonymous identity and invalid signed claims are rejected by actual adapter', async () => {
   for (const flag of ['anonymous', 'badSignature', 'emailConfirmed', 'passwordProof'] as const) {

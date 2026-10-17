@@ -154,8 +154,8 @@ async function boot(){
   try{const result=await api.session(controller.signal);if(!validRead(seq,controller))return;
     try{const state=await api.authState(controller.signal);if(!validRead(seq,controller))return;managed=true;rememberAccess(state.data);if(access.state!=='authenticated'){renderAccess();return;}}
     catch(error){if(error.status!==404)throw error;managed=false;}
-    if(!validRead(seq,controller))return;session=result.data;$('#user-context').innerHTML=`<strong>${e(session.name)}</strong><small>${managed?'Owner account':e(session.roles.join(' · '))}</small>`;
-    $('#mode-detail').textContent=session.authenticationProvider==='automated-test'?'Automated test identity · Synthetic records only':'Authenticated property and rental records · Synthetic development';
+    if(!validRead(seq,controller))return;session=result.data;$('#user-context').innerHTML=`<strong>${e(managed?'HAMDEE owner':session.name)}</strong><small>${managed?'Owner account':e(session.roles.join(' · '))}</small>`;
+    $('#mode-detail').textContent=session.authenticationProvider==='automated-test'?'Automated test identity · Synthetic records only':'Authenticated property and rental records · Private owner workspace';
     await render();if(session&&managed)void discoverOperations();
   }catch(error){if(!validRead(seq,controller))return;if(accessLost(error))await showAccessLoss(error);else{clearProtected();showUnavailable('Backend unavailable',error.message);}}
   finally{if(validRead(seq,controller))$('#main').setAttribute('aria-busy','false');}
@@ -202,10 +202,10 @@ async function render(){
       await renderRentalDashboard(rentalTarget,{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss,onReportChange:period=>renderExpenses(expenseTarget,{...expenseOptions,period})});
       if(validRead(seq,controller))await renderExpenses(expenseTarget,{...expenseOptions,period:rentalReportPeriod()});
     }else if(['expenses','maintenance','reports'].includes(route)&&managed){
-      current=null;page=null;main.innerHTML=heading(route==='reports'?'Monthly property report':route==='maintenance'?'Property maintenance':'Property expenses','Saved property costs and payments. Synthetic development only.')+'<div id="expense-workspace"></div>';
+      current=null;page=null;main.innerHTML=heading(route==='reports'?'Monthly property report':route==='maintenance'?'Property maintenance':'Property expenses','Private owner records · Saved property costs and payments.')+'<div id="expense-workspace"></div>';
       await renderExpenses($('#expense-workspace'),{api,summaryOnly:route==='reports',signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
     }else if(['tenants','collections','cheques'].includes(route)&&managed){
-      current=null;page=null;main.innerHTML=heading(route==='tenants'?'Rooms, tenants & agreements':route==='cheques'?'Cheque register':'Rent collections','Saved room-level records. Synthetic development only.')+'<div id="rental-workspace"></div>';
+      current=null;page=null;main.innerHTML=heading(route==='tenants'?'Rooms, tenants & agreements':route==='cheques'?'Cheque register':'Rent collections','Private owner records · Saved room-level records.')+'<div id="rental-workspace"></div>';
       await renderRental($('#rental-workspace'),{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
     }else if(route==='dashboard'||route==='properties'){
       const result=await api.list(filters,controller.signal);if(!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;page=result;current=null;

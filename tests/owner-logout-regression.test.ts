@@ -32,7 +32,8 @@ function sdk(timeout = 3000) {
     const request = new Request(input, init), url = new URL(request.url);
     assert.equal(url.origin, origin);
     if (url.pathname.endsWith('/.well-known/jwks.json')) return Response.json({ keys: [jwk] });
-    if (url.pathname.endsWith('/user')) return Response.json(user(true));
+    if (url.pathname.endsWith('/user')) return facts.revoked
+      ?Response.json({code:'session_not_found',msg:'Synthetic managed session revoked'},{status:403}):Response.json(user(true));
     if (url.pathname.endsWith('/token')) {
       const grant = url.searchParams.get('grant_type');
       assert.ok(grant === 'password' || grant === 'refresh_token');

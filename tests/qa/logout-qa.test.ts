@@ -74,7 +74,8 @@ test('Independent logout regression: managed access rejection with live refresh 
       return Response.json({ access_token: jwt(), refresh_token: 'SYNTHETIC_INDEPENDENT_REFRESH', token_type: 'bearer', expires_in: 3600,
         expires_at: Math.floor(Date.now() / 1000) + 3600, user });
     }
-    if (url.pathname.endsWith('/user')) return Response.json(user);
+    if (url.pathname.endsWith('/user')) return revoked
+      ?Response.json({code:'session_not_found',msg:'Synthetic managed session revoked'},{status:403}):Response.json(user);
     if (url.pathname.endsWith('/logout')) {
       const access = request.headers.get('Authorization') || ''; attempts.push(access);
       if (attempts.length === 1) {

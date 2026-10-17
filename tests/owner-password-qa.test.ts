@@ -191,18 +191,19 @@ function sdk() {
       if (facts.revoked) return Response.json({ error_code: 'refresh_token_not_found', msg: 'Synthetic revoked' }, { status: 400 });
       return Response.json({ access_token: jwt(), refresh_token: 'SYNTHETIC_PASSWORD_QA_REFRESH', token_type: 'bearer', expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, user: user() });
     }
-    if (url.pathname.endsWith('/user')) return Response.json(user());
+    if (url.pathname.endsWith('/user')) return facts.revoked
+      ?Response.json({code:'session_not_found',msg:'Synthetic managed session revoked'},{status:403}):Response.json(user());
     if (url.pathname.endsWith('/logout')) { facts.revoked = true; return new Response(null, { status: 204 }); }
     throw new Error('Unexpected SDK endpoint intercepted: ' + url.pathname);
   };
   return { facts, email, provider: createManagedOwnerProvider({ supabaseUrl: `https://${projectRef}.supabase.co`, publishableKey: 'sb_publishable_SYNTHETIC_PASSWORD_QA_ONLY', requestTimeoutMs: 3000, fetch: fetcher }) };
 }
 
-test('Password SDK QA: verified password aal1 works without a factor endpoint and refresh is actively checked', async () => {
+test('Password SDK QA: verified password aal1 uses live managed-user checks without needless refresh', async () => {
   const f = sdk(), session = await f.provider.signIn(f.email, 'SYNTHETIC_TEST_PASSWORD_ONLY');
   assert.equal(session.assurance, 'aal1'); assert.equal(session.factors.length, 0);
   await f.provider.verifySession(session.tokens);
-  assert.ok(f.facts.calls.some(c => c.includes('grant_type=password'))); assert.ok(f.facts.calls.some(c => c.includes('grant_type=refresh_token')));
+  assert.ok(f.facts.calls.some(c => c.includes('grant_type=password'))); assert.equal(f.facts.calls.some(c => c.includes('grant_type=refresh_token')),false);
   assert.ok(f.facts.calls.some(c => c.endsWith('/user'))); assert.ok(f.facts.calls.every(c => !/factors|challenge|verify/.test(c)));
   await f.provider.signOut(session.tokens); await assert.rejects(() => f.provider.verifySession(session.tokens));
 });
