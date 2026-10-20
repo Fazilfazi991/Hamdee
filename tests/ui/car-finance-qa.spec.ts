@@ -128,8 +128,14 @@ test('Independent full workspace: without007 Staff and finance remain live while
   await nav(page, 'Company Finance'); await expect(page.getByRole('region', { name: 'Cash account register', exact: true })).toBeVisible();
   await nav(page, 'Personal Finance'); await expect(page.getByRole('region', { name: 'Cash account register', exact: true })).toBeVisible();
   const menu = page.getByRole('button', { name: 'Open navigation', exact: true }); if (await menu.isVisible()) await menu.click();
-  const disabled = page.locator('#navigation').getByRole('button', { name: 'Car Rentals Unavailable', exact: true });
-  await expect(disabled).toBeDisabled(); expect(await disabled.getAttribute('href')).toBeNull();
+  // The safe server error intentionally does not reveal whether storage is
+  // missing or temporarily unreachable. Retry may recheck availability, but
+  // cannot expose a destination before a successful authorized response.
+  const unavailable = page.locator('#navigation').getByRole('button', { name: /^Car Rentals (Unavailable|Retry)$/ });
+  await expect(unavailable).toBeVisible(); expect(await unavailable.getAttribute('href')).toBeNull();
+  await expect(page.locator('#navigation').getByRole('link', { name: 'Car Rentals', exact: true })).toHaveCount(0);
+  if ((await unavailable.textContent())?.includes('Retry')) await expect(unavailable).toHaveAttribute('data-action', 'retry-modules');
+  else await expect(unavailable).toBeDisabled();
   await page.goto(server.url + '/workspace/index.html#car-rentals'); await expect(page.locator('#main')).toContainText(/unavailable/i);
   await nav(page, 'Staff Collections'); await expect(page.getByRole('region', { name: 'Collector register', exact: true })).toBeVisible();
   await page.screenshot({ path: `evidence/car-finance-qa/screenshots/${info.project.name}-car007-absent.png`, fullPage: true });

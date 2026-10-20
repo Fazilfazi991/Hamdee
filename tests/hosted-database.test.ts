@@ -58,8 +58,12 @@ test('Hosted transaction: guards run within BEGIN; success commits and all denie
   }
   const f=fakeClient();assert.equal(await runTransaction(f.client,sql=>guardHostedTransaction(sql,async()=>42)),42);
   assert.equal(f.calls[0],'BEGIN');assert.equal(f.calls.at(-1),'COMMIT');assert.equal(f.discard(),false);
-  assert.ok(f.calls.includes('SET LOCAL ROLE hamdee_runtime'));assert.ok(f.calls.includes('SET LOCAL search_path=pg_catalog'));
-  assert.ok(f.calls.filter(x=>x.startsWith('SET LOCAL')).length>=5);
+  assert.ok(f.calls.includes('SET LOCAL ROLE hamdee_runtime'));
+  assert.equal(f.calls.length,6); // BEGIN, fixed settings, role guard, SET ROLE, marker, COMMIT.
+  assert.match(f.calls[1],/pg_catalog\.set_config\('statement_timeout','10000ms',true\)/);
+  assert.match(f.calls[1],/pg_catalog\.set_config\('lock_timeout','3000ms',true\)/);
+  assert.match(f.calls[1],/pg_catalog\.set_config\('idle_in_transaction_session_timeout','10000ms',true\)/);
+  assert.match(f.calls[1],/pg_catalog\.set_config\('search_path','pg_catalog',true\)/);
 });
 test('Hosted transaction: callback failure and uncertain COMMIT discard the connection without silent retry',async()=>{
   for(const commitError of [false,true]){

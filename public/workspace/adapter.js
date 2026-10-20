@@ -5,13 +5,24 @@ export class PropertyApi {
     return this.fetchJson(this.base+path,options);
   }
   async fetchJson(url,options={}) {
-    let response,result;
+    let response,result,readController,deadline,aborted=false;
+    const upstream=options.signal,onAbort=()=>readController.abort(upstream.reason);
+    // Bound reads only. Mutations retain their existing exact-key/uncertain
+    // submission handling and are never retried by this adapter.
+    if(!options.method||options.method==='GET'){
+      readController=new window.AbortController();
+      if(upstream?.aborted)onAbort();else upstream?.addEventListener('abort',onAbort,{once:true});
+      deadline=window.setTimeout(()=>{aborted=true;readController.abort();},25000);
+      options={...options,signal:readController.signal};
+    }
+    try{
     try{response=await fetch(url,{...options,cache:'no-store',credentials:'same-origin'});}
-    catch(cause){if(cause.name==='AbortError')throw cause;const error=new Error('Connection interrupted. Retry the same submission to confirm its result.');error.uncertain=true;throw error;}
+    catch(cause){if(aborted){const error=new Error('The service took too long to respond. Retry when the connection is ready.');error.code='REQUEST_TIMEOUT';error.status=504;throw error;}if(cause.name==='AbortError')throw cause;const error=new Error('Connection interrupted. Retry the same submission to confirm its result.');error.uncertain=true;throw error;}
     try{result=await response.json();}
     catch{const error=new Error('The service returned an unreadable response. Retry the same submission or refresh the connection.');error.status=response.status;error.uncertain=true;throw error;}
     if(!response.ok){const error=new Error(result.error?.message||'The operation could not be confirmed.');error.code=result.error?.code;error.status=response.status;error.requestId=result.requestId;error.retryAfter=response.headers.get('Retry-After');error.uncertain=response.status>=500;throw error;}
     return result;
+    }finally{window.clearTimeout(deadline);upstream?.removeEventListener('abort',onAbort);}
   }
   rememberState(data){
     if(!data||!['anonymous','authenticated','recovery_pending'].includes(data.state)||typeof data.csrfToken!=='string'||!data.csrfToken||!Array.isArray(data.factors)||data.factors.length!==0||(data.expiresAt!==null&&(!Number.isSafeInteger(data.expiresAt)||data.expiresAt<0))){throw new Error('The service returned an invalid access state. Check the connection before continuing.');}

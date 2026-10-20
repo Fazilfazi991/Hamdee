@@ -20,9 +20,9 @@ export async function renderExpenses(target,options){
  if(options.period)report={...report,...options.period};
  const c={...options,target,generation};context=c;target.innerHTML='<div class="empty" role="status">Loading property costs and maintenance…</div>';
  try{
-  const [result,rental]=await Promise.all([c.api.expenseRead({month:report.month,asOf:report.asOf,...(c.property?{propertyId:c.property.id}:report.propertyId?{propertyId:report.propertyId}:{})},c.signal),c.api.rentalRead({month:report.month,asOf:report.asOf,...(c.property?{propertyId:c.property.id}:{})},c.signal)]);
-  let cursor='',properties=[];do{const p=await c.api.list({archiveState:'all',q:'',limit:'100',cursor},c.signal);properties.push(...p.data);cursor=p.nextCursor??'';}while(cursor&&alive(c));
-  if(!alive(c)||!await c.verifyAccess()||!alive(c))return;c.data=result.data;c.properties=properties;c.rooms=rental.data.rooms;
+  const [result,rental]=await Promise.all([c.api.expenseRead({month:report.month,asOf:report.asOf,...(c.property?{propertyId:c.property.id}:report.propertyId?{propertyId:report.propertyId}:{})},c.signal),c.summaryOnly?Promise.resolve(null):c.api.rentalRead({month:report.month,asOf:report.asOf,...(c.property?{propertyId:c.property.id}:{})},c.signal)]);
+  let cursor='',properties=c.property?[c.property]:[];if(!c.property)do{const p=await c.api.list({archiveState:'all',q:'',limit:'100',cursor},c.signal);properties.push(...p.data);cursor=p.nextCursor??'';}while(cursor&&alive(c));
+  if(!alive(c)||!await c.verifyAccess()||!alive(c))return;c.data=result.data;c.properties=properties;c.rooms=rental?.data.rooms||[];
   const property=id=>properties.find(p=>p.id===id)?.name||id,room=id=>c.rooms.find(r=>r.id===id)?.code||'Property-level';
   let body=(!c.summaryOnly?sectionLinks(c):'')+(c.followRentalPeriod?`<p class="muted-help">Property costs for ${esc(report.month)} through ${esc(report.asOf)} · Uses the rental filters above.</p>`:filters(c))+summary(c);
   if(!c.summaryOnly){
@@ -33,7 +33,7 @@ export async function renderExpenses(target,options){
    body+=panel('Expense payments','Cash/bank payments and pending cheques retain their own dates, amounts and references.',table(['Property','Payment date','Vendor','Method','Amount','Status','Reference'],c.data.payments.filter(p=>p.paymentDate.slice(0,7)===report.month&&p.paymentDate<=report.asOf&&inSection(c.data.expenses.find(e=>e.id===p.expenseId))).map(p=>{const e=c.data.expenses.find(e=>e.id===p.expenseId);return [esc(property(p.propertyId)),esc(p.paymentDate),esc(e?.vendorName),esc(p.method),cash(p.amountMinor,e?.currency),esc(p.status),esc(p.reference||'—')];}),'Expense payment register'));
   }
   target.innerHTML=body;
- }catch(error){if(!alive(c))return;if([401,403].includes(error.status))await c.onAccessLoss(error);else target.innerHTML=panel('Expenses unavailable',esc(error.message),'');}
+ }catch(error){if(!alive(c))return;if([401,403].includes(error.status))await c.onAccessLoss(error);else target.innerHTML=panel('Unable to load expenses',esc(error.message),'','<button type="button" class="button subtle" data-action="retry-view">Retry expenses</button>');}
 }
 function dialog(title,body,state,trigger){returnFocus=trigger;let d=modal();if(!d){d=document.createElement('dialog');d.id='expense-dialog';d.setAttribute('aria-labelledby','expense-dialog-title');document.body.append(d);d.addEventListener('cancel',event=>{if(writer)event.preventDefault();else{const target=dialogState?.trigger||returnFocus;dialogState=null;d.innerHTML='';target?.focus();}});}
  dialogState=state;d.innerHTML=`<form id="expense-form"><header class="dialog-header"><div><span class="eyebrow">HAMDEE PROPERTY OPERATIONS</span><h2 id="expense-dialog-title">${title}</h2></div><button class="icon-button" type="button" data-expense-action="close" aria-label="Close expense dialog">×</button></header><div class="rental-dialog-body"><div class="form-grid rental-form-grid">${body}</div></div><p id="expense-error" role="alert" tabindex="-1"></p><footer id="dialog-footer"><button class="button subtle" type="button" data-expense-action="close">${state?'Cancel':'Close'}</button>${state?'<button class="button primary" type="submit" id="expense-save">Save expense record</button>':''}</footer></form>`;d.showModal();}

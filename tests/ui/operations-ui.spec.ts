@@ -27,10 +27,12 @@ async function navigate(page:Page,name:string){
 }
 test('operations shells preserve owner access and never fabricate unconnected balances',async({page},info)=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));await login(page);
-  await expect(page.locator('#navigation button:disabled')).toHaveCount(5);
-  for(const entry of await page.locator('#navigation button:disabled').all()){
-    await expect(entry).toContainText('Unavailable');
+  await expect(page.locator('#navigation button')).toHaveCount(5);
+  for(const entry of await page.locator('#navigation button').all()){
+    await expect(entry).toContainText(/Unavailable|Checking…|Retry/);
     expect(await entry.getAttribute('href')).toBeNull();
+    if((await entry.textContent())?.includes('Retry'))await expect(entry).toHaveAttribute('data-action','retry-modules');
+    else await expect(entry).toBeDisabled();
   }
   await expect(page.getByRole('link',{name:'Staff Collections',exact:true})).toHaveCount(0);
   await page.goto(server.url+'/workspace/index.html#staff-collections');
@@ -79,7 +81,7 @@ async function staffContract(page:Page,write?:(route:Route,body:Record<string,un
     }
     await route.fulfill({json:{data:new URL(route.request().url()).pathname.endsWith('/receipts')?{data:[source],hasMore:false,asOf:day,moneyUnit:overview.moneyUnit}:overview,requestId:'synthetic-request'}});
   });
-  await page.route('**/api/hamdee/v1/company-finance?*',route=>route.fulfill({json:{data:{accounts,totals:[],entries:[],monthEntries:[],month,asOf:day},requestId:'synthetic-request'}}));
+  await page.route('**/api/hamdee/v1/company-finance?*',route=>route.fulfill({json:{data:{accounts,transferAccounts:accounts,scope:'company',moneyUnit:'decimal-major-unit-strings',totals:[],entries:[],monthEntries:[],month,asOf:day},requestId:'synthetic-request'}}));
   await page.route('**/api/hamdee/v1/company-finance/commands',async route=>{
     const body=route.request().postDataJSON() as Record<string,unknown>,headers=route.request().headers();commands.push({body,key:headers['idempotency-key'],csrf:headers['x-hamdee-csrf']});
     await route.fulfill({json:{data:{id:accountId},replay:false}});

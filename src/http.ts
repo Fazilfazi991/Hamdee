@@ -33,20 +33,20 @@ export function createHandler(provider:IdentityProvider,service:PropertyService,
     const json=(body:unknown,status=200,extra:Record<string,string>={})=>Response.json({...body as object,requestId},{status,headers:{...headers,...extra}});
     try {
       const identity=await provider.validate(request);
-      // Also validate enabled membership before parsing untrusted mutation fields.
-      const session=await service.session(identity);
-      const url=new URL(request.url);
-      requireThat(url.pathname===base||url.pathname.startsWith(base+'/'),404,'NOT_FOUND','Endpoint not found.');
-      const path=url.pathname.slice(base.length).replace(/\/$/,'');
-      if(path==='/session'&&request.method==='GET') return json({data:{...session,authenticationProvider:provider.kind||'server-validated'}});
+      const url=new URL(request.url),path=url.pathname.slice(base.length).replace(/\/$/,'');
       const moduleName=path.split('/')[1];
       const modules:Record<string,keyof OperationsApiServices>={'staff-collections':'staffCollections','company-finance':'companyFinance','personal-finance':'personalFinance','car-rentals':'carRentals'};
+      // Also validate enabled membership before parsing untrusted mutation fields.
+      // For operational modules, the full owner portfolio grant is checked in
+      // this same transaction; it is never inferred from a role name alone.
+      const session=await service.session(identity,Object.hasOwn(modules,moduleName));
+      requireThat(url.pathname===base||url.pathname.startsWith(base+'/'),404,'NOT_FOUND','Endpoint not found.');
+      if(path==='/session'&&request.method==='GET') return json({data:{...session,authenticationProvider:provider.kind||'server-validated'}});
       if(Object.hasOwn(modules,moduleName)){
         const modulePath='/'+moduleName,isCommand=path===modulePath+'/commands',isReceipts=moduleName==='staff-collections'&&path===modulePath+'/receipts';
         requireThat(path===modulePath||isCommand||isReceipts,404,'NOT_FOUND','Endpoint not found.');
         // No staff identities or additional roles: these APIs require the same
         // current full owner portfolio grant before request fields are parsed.
-        await service.ownerContext(identity,async()=>{});
         requireThat(request.method===(isCommand?'POST':'GET'),405,'METHOD_NOT_ALLOWED','This method is unavailable.');
         const module=operations[modules[moduleName]];
         if(!isCommand){

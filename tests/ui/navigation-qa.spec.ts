@@ -41,16 +41,16 @@ async function noDeadSidebar(page: Page, staff: boolean) {
   await drawer(page); const navigation = page.locator('#navigation');
   const labels = (await navigation.getByRole('link').allTextContents()).map(label => label.trim());
   expect(labels.sort()).toEqual((staff ? [...coreNames, 'Staff Collections'] : [...coreNames]).sort());
-  const entries = navigation.locator('a, button:disabled, [aria-disabled="true"]');
+  const entries = navigation.locator('a, button, [aria-disabled="true"]');
   await expect(entries).toHaveCount(9);
-  expect((await entries.allTextContents()).map(text => text.trim().replace(/\s*Unavailable\s*$/i, '').trim())).toEqual(sidebarOrder);
+  expect((await entries.allTextContents()).map(text => text.trim().replace(/\s*(Unavailable|Checking…|Retry)\s*$/i, '').trim())).toEqual(sidebarOrder);
   for (const name of [...unfinishedNames, ...(staff ? [] : ['Staff Collections'])]) {
     await expect(navigation.getByRole('link', { name, exact: true })).toHaveCount(0);
-    const disabled = navigation.locator('button:disabled, [aria-disabled="true"]').filter({ hasText: name });
+    const disabled = navigation.locator('button, [aria-disabled="true"]').filter({ hasText: name });
     await expect(disabled).toHaveCount(1); await expect(disabled).toBeVisible();
-    await expect(disabled).toContainText(/Unavailable/i);
+    await expect(disabled).toContainText(/Unavailable|Checking…|Retry/i);
     expect(await disabled.getAttribute('href')).toBeNull();
-    expect(await disabled.evaluate(element => element.tagName !== 'A' && element.getAttribute('role') !== 'link' && (element.matches('button:disabled') || (element.getAttribute('aria-disabled') === 'true' && element.tabIndex < 0)))).toBeTruthy();
+    expect(await disabled.evaluate(element => element.tagName !== 'A' && element.getAttribute('role') !== 'link' && (element.matches('button:disabled') || element.getAttribute('data-action') === 'retry-modules' || (element.getAttribute('aria-disabled') === 'true' && element.tabIndex < 0)))).toBeTruthy();
   }
   for (const href of await navigation.getByRole('link').evaluateAll(links => links.map(link => link.getAttribute('href')))) expect(href).toMatch(/^#[a-z][a-z-]*(?:\/[^\s]+)?$/);
 }

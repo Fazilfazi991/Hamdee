@@ -17,7 +17,7 @@ try{
     await setTimeout(100);
   }
   assert.equal(ready,true,'Owned Next server startup timed out');
-  const page=await fetch(origin+'/workspace/index.html');assert.equal(page.status,200);assert.match(await page.text(),/PRIVATE OWNER WORKSPACE/);
+  const page=await fetch(origin+'/workspace/index.html');assert.equal(page.status,200);assert.match(await page.text(),/Owner access only/);
   const rentalAsset=await fetch(origin+'/workspace/rental.js');assert.equal(rentalAsset.status,200);
   const expenseAsset=await fetch(origin+'/workspace/expenses.js');assert.equal(expenseAsset.status,200);
   for(const path of ['/api/hamdee/v1/properties','/api/hamdee/v1/rental','/api/hamdee/v1/expenses'])for(const method of ['GET','POST','PATCH','DELETE']){

@@ -63,10 +63,12 @@ export function hostedConnectionOptions(connectionUrl:string,pins:HostedDatabase
 /** All session state is transaction-local, including on transaction poolers.
  * Existing queries use unnamed statements and no query pipelining. */
 export async function guardHostedTransaction<T>(sql:Sql,work:(sql:Sql)=>Promise<T>):Promise<T> {
-  await sql.query("SET LOCAL statement_timeout='10000ms'");
-  await sql.query("SET LOCAL lock_timeout='3000ms'");
-  await sql.query("SET LOCAL idle_in_transaction_session_timeout='10000ms'");
-  await sql.query('SET LOCAL search_path=pg_catalog');
+  // All four independent settings remain transaction-local. One server round
+  // trip applies the same fixed limits before any role/identity/data query.
+  await sql.query(`SELECT pg_catalog.set_config('statement_timeout','10000ms',true),
+    pg_catalog.set_config('lock_timeout','3000ms',true),
+    pg_catalog.set_config('idle_in_transaction_session_timeout','10000ms',true),
+    pg_catalog.set_config('search_path','pg_catalog',true)`);
   const role=(await sql.query<{safe:boolean}>(`SELECT r.rolname='hamdee_backend' AND r.rolcanlogin
     AND NOT (r.rolsuper OR r.rolbypassrls OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolinherit)
     AND NOT EXISTS(SELECT 1 FROM pg_roles other WHERE other.rolname NOT IN ('hamdee_backend','hamdee_runtime')

@@ -68,9 +68,15 @@ export class PropertyService {
       await recheckIdentity(identity);return result;
     });
   }
-  async session(identity: Identity) {
-    return this.context(identity,'read',async ({user,grants})=>({ id:user.id,name:user.display_name,
-      roles:[...new Set(grants.map(g=>g.role))], capabilities:[...new Set(grants.flatMap(g=>(['read','create','update','archive','restore','audit'] as Capability[]).filter(c=>permits(g,c))))] }));
+  async session(identity: Identity,ownerOnly=false) {
+    return this.context(identity,'read',async ({user,grants})=>{
+      // Optional-module request preflight uses this same current membership
+      // transaction instead of opening a second empty ownerContext transaction.
+      // The module's own transaction and live precommit recheck still run.
+      if(ownerOnly)requireThat(grants.some(g=>g.role==='admin'&&g.portfolio),403,'OWNER_ACCESS_DENIED','Owner access is required.');
+      return {id:user.id,name:user.display_name,roles:[...new Set(grants.map(g=>g.role))],
+        capabilities:[...new Set(grants.flatMap(g=>(['read','create','update','archive','restore','audit'] as Capability[]).filter(c=>permits(g,c))))]};
+    });
   }
   private async getRow(ctx:Context,id:string):Promise<Row> {
     const row=(await ctx.sql.query<Row>('SELECT * FROM hamdee_private.properties WHERE id=$1',[id])).rows[0];
