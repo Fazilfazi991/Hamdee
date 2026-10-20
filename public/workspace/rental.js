@@ -16,7 +16,11 @@ const alive=c=>context===c&&c.generation===generation&&c.isCurrent()&&!c.signal.
 const filters=dashboard=>`<form class="toolbar rental-filters" data-rental-filter="${dashboard?'dashboard':'records'}"><label>Rent month<input type="month" name="month" value="${esc(report.month)}" required></label><label>Occupancy / balance date<input type="date" name="asOf" value="${esc(report.asOf)}" required></label>${!dashboard&&!context.property?`<label>Property<select name="propertyId"><option value="">All properties</option>${context.properties.map(p=>`<option value="${esc(p.id)}" ${report.propertyId===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>`:''}<button class="button subtle" type="submit">Apply rental filters</button></form>`;
 const totals=d=>`<div class="metrics owner-metadata-metrics">${[['Total rooms',d.summary.totalRooms],['Occupied rooms',d.summary.occupiedRooms],['Vacant rooms',d.summary.vacantRooms]].map(([label,value])=>`<div class="metric"><div class="metric-top"><span>${label}</span></div><div class="metric-value">${value}</div><p class="metric-note">Agreement-based on ${esc(report.asOf)} · Confirm imported occupancy.</p></div>`).join('')}</div>`+
  panel('Monthly rent','Issued obligations for the selected month; collections allocated through the balance date. Currencies stay separate.',table(['Currency','Monthly rent due','Rent collected','Outstanding','Unapplied advances','Deposits held','Pending cheques'],d.summary.currencies.map(c=>[esc(c.currency),cash(c.dueMinor,c.currency),cash(c.collectedMinor,c.currency),cash(c.outstandingMinor,c.currency),cash(c.advanceMinor,c.currency),cash(c.depositMinor,c.currency),cash(c.chequePendingMinor,c.currency)]),'Monthly rental summary'));
-async function load(c){return (await c.api.rentalRead({month:report.month,asOf:report.asOf,...(c.property?{propertyId:c.property.id}:report.propertyId&&!c.dashboard?{propertyId:report.propertyId}:{})},c.signal)).data;}
+async function load(c){
+ const pending=c.prefetchedRental;delete c.prefetchedRental;
+ if(pending){const result=await pending;if(!result.ok)throw result.error;return result.value.data;}
+ return (await c.api.rentalRead({month:report.month,asOf:report.asOf,...(c.property?{propertyId:c.property.id}:report.propertyId&&!c.dashboard?{propertyId:report.propertyId}:{})},c.signal)).data;
+}
 export async function renderRentalDashboard(target,options){
  const c={...options,target,dashboard:true,generation};context=c;
  target.innerHTML='<div role="status" class="empty">Loading saved rental balances…</div>';

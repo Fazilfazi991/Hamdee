@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { startOwnerBrowserHarness } from '../support/owner-crm-harness';
 import { seedPropertyReceipt } from '../support/staff-qa-fixture';
+import { randomUUID } from 'node:crypto';
 
 let server: Awaited<ReturnType<typeof startOwnerBrowserHarness>>;
 test.setTimeout(120_000);
@@ -17,6 +18,74 @@ async function login(page: Page) {
 }
 
 const emptyCars = { moneyUnit: 'decimal-major-unit-strings', vehicles: [], agreements: [], availability: [], balances: [], collections: [], expenses: [], history: [], summary: [] };
+
+test('villa rooms start alongside the property read, consume once, and refresh saved rooms and report cutoffs', async ({ page }) => {
+  const source = await seedPropertyReceipt(server.fixture, { amount: '100.00' });
+  await login(page); await expect(page.locator('#rental-dashboard')).toHaveAttribute('aria-busy', 'false');
+  const reads: URL[] = []; page.on('request', request => { const url = new URL(request.url()); if (url.pathname === '/api/hamdee/v1/rental' && request.method() === 'GET' && url.searchParams.get('propertyId') === source.property.id) reads.push(url); });
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; }), propertyStarted = new Promise<void>(resolve => { entered = resolve; });
+  let hold = true;
+  await page.route('**/api/hamdee/v1/properties/' + source.property.id, async route => {
+    if (!hold) { await route.continue(); return; } hold = false;
+    const response = await route.fetch(); entered(); await held; try { await route.fulfill({ response }); } catch { /* Route replacement may abort it. */ }
+  });
+  const rentalStarted = page.waitForRequest(request => new URL(request.url()).pathname === '/api/hamdee/v1/rental' && new URL(request.url()).searchParams.get('propertyId') === source.property.id);
+  await page.evaluate(hash => { window.location.hash = hash; }, 'properties/' + source.property.id + '/rooms');
+  try {
+    await propertyStarted; await rentalStarted;
+    await expect(page.getByRole('region', { name: 'Rooms and occupancy', exact: true })).toHaveCount(0);
+  } finally { release(); }
+  const rooms = page.getByRole('region', { name: 'Rooms and occupancy', exact: true });
+  await expect(rooms).toContainText(source.room.code); await expect(page.locator('#main')).toHaveAttribute('aria-busy', 'false'); expect(reads).toHaveLength(1);
+  await page.getByRole('button', { name: 'Add room', exact: true }).click();
+  await page.getByLabel('Room code', { exact: true }).fill('SYNTHETIC-FRESH-ROOM');
+  await page.getByRole('button', { name: 'Save record', exact: true }).click();
+  await expect(rooms).toContainText('SYNTHETIC-FRESH-ROOM'); expect(reads).toHaveLength(2);
+  await page.getByLabel('Rent month', { exact: true }).fill('2026-10');
+  await page.getByLabel('Occupancy / balance date', { exact: true }).fill('2026-10-17');
+  await page.getByRole('button', { name: 'Apply rental filters', exact: true }).click(); await expect(rooms).toContainText('SYNTHETIC-FRESH-ROOM');
+  const sections = page.getByRole('navigation', { name: 'Villa rental sections', exact: true });
+  await sections.getByRole('link', { name: 'Tenants', exact: true }).click(); await expect(page.getByLabel('Occupancy / balance date', { exact: true })).toHaveValue('2026-10-17');
+  await page.goBack(); await expect(rooms).toContainText('SYNTHETIC-FRESH-ROOM');
+  expect(reads.at(-1)?.searchParams.get('asOf')).toBe('2026-10-17');
+  await page.reload(); await expect(rooms).toContainText('SYNTHETIC-FRESH-ROOM');
+});
+
+test('villa expense and room reads begin before the property resolves and later filters read new saved costs', async ({ page }) => {
+  const source = await seedPropertyReceipt(server.fixture, { amount: '100.00' });
+  await login(page); await expect(page.locator('#expense-dashboard')).toHaveAttribute('aria-busy', 'false');
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let hold = true;
+  await page.route('**/api/hamdee/v1/properties/' + source.property.id, async route => {
+    if (!hold) { await route.continue(); return; } hold = false;
+    const response = await route.fetch(); await held; try { await route.fulfill({ response }); } catch { /* Route replacement may abort it. */ }
+  });
+  const scoped = (request: { url: () => string }, kind: string) => { const url = new URL(request.url()); return url.pathname === '/api/hamdee/v1/' + kind && url.searchParams.get('propertyId') === source.property.id; };
+  const expenseStarted = page.waitForRequest(request => scoped(request, 'expenses')), roomStarted = page.waitForRequest(request => scoped(request, 'rental'));
+  const reads: string[] = []; page.on('request', request => { if (request.method() === 'GET' && (scoped(request, 'expenses') || scoped(request, 'rental'))) reads.push(new URL(request.url()).pathname); });
+  await page.evaluate(hash => { window.location.hash = hash; }, 'properties/' + source.property.id + '/expenses');
+  try { await Promise.all([expenseStarted, roomStarted]); await expect(page.getByRole('region', { name: 'Property expense register', exact: true })).toHaveCount(0); } finally { release(); }
+  const expenses = page.getByRole('region', { name: 'Property expense register', exact: true });
+  await expect(expenses).toBeVisible(); await expect(page.locator('#main')).toHaveAttribute('aria-busy', 'false'); expect(reads).toHaveLength(2);
+  const response = await server.fixture.request('POST', '/api/hamdee/v1/expenses', { action: 'record-expense', propertyId: source.property.id, category: 'maintenance', expenseDate: '2026-10-17', amount: '5.00', currency: 'QAR', vendorName: 'Synthetic fresh expense vendor', reference: 'SYNTHETIC-FRESH-COST' }, { 'Idempotency-Key': randomUUID() }); expect(response.ok).toBeTruthy();
+  await page.getByLabel('Expense month', { exact: true }).fill('2026-10'); await page.getByLabel('Report through', { exact: true }).fill('2026-10-17');
+  await page.getByRole('button', { name: 'Apply expense filters', exact: true }).click();
+  await expect(expenses).toContainText('SYNTHETIC-FRESH-COST'); expect(reads).toHaveLength(4);
+});
+
+test('a cancelled or rejected property route cannot expose prefetched rental records or unhandled failures', async ({ page }) => {
+  const source = await seedPropertyReceipt(server.fixture, { amount: '100.00' }); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await login(page); await expect(page.locator('#rental-dashboard')).toHaveAttribute('aria-busy', 'false');
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/hamdee/v1/properties/' + source.property.id, async route => { await held; try { await route.fulfill({ status: 403, json: { error: { code: 'PROPERTY_ACCESS_DENIED', message: 'Property access denied.' } } }); } catch { /* A replaced route is aborted. */ } });
+  await page.route('**/api/hamdee/v1/rental?*', route => new URL(route.request().url()).searchParams.get('propertyId') === source.property.id ? route.fulfill({ status: 503, json: { error: { code: 'STORAGE_UNAVAILABLE', message: 'Synthetic rejected parallel read.' } } }) : route.continue());
+  const started = page.waitForRequest(request => new URL(request.url()).pathname === '/api/hamdee/v1/rental' && new URL(request.url()).searchParams.get('propertyId') === source.property.id);
+  await page.evaluate(hash => { window.location.hash = hash; }, 'properties/' + source.property.id + '/rooms'); await started;
+  await page.evaluate(() => { window.location.hash = 'dashboard'; }); release();
+  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Rooms and occupancy', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await expect(page.getByLabel('Email', { exact: true })).toBeVisible(); expect(errors).toEqual([]);
+});
 test('authorized Staff records stay accessible while company account discovery is unavailable', async ({ page }) => {
   await page.route('**/api/hamdee/v1/staff-collections?*', route => route.fulfill({ json: { data: {
     moneyUnit: 'decimal-major-unit-strings', collectors: [], collections: [], handovers: [], totals: [], daily: [], history: []

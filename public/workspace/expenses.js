@@ -6,6 +6,7 @@ const act=(label,action,id='',primary=false)=>`<button type="button" class="butt
 const field=(name,label,type='text',value='',required=true,extra='')=>sharedField(name,label,type,value,required,extra,'expense');
 const select=(name,label,values,selected='',required=true)=>sharedSelect(name,label,values,selected,required,'expense');
 let context=null,dialogState=null,returnFocus=null,generation=0,writer=null,report={month:today().slice(0,7),asOf:today(),propertyId:''};
+export const expenseReportPeriod=()=>({month:report.month,asOf:report.asOf});
 const modal=()=>document.querySelector('#expense-dialog');
 const alive=c=>context===c&&generation===c.generation&&c.isCurrent()&&!c.signal.aborted;
 export function resetExpenses(preservePeriod=false){generation++;writer?.abort();writer=null;context=null;dialogState=null;returnFocus=null;if(!preservePeriod)report={month:today().slice(0,7),asOf:today(),propertyId:''};const d=modal();if(d){d.close();d.innerHTML='';}}
@@ -20,7 +21,8 @@ export async function renderExpenses(target,options){
  if(options.period)report={...report,...options.period};
  const c={...options,target,generation};context=c;target.innerHTML='<div class="empty" role="status">Loading property costs and maintenance…</div>';
  try{
-  const [result,rental]=await Promise.all([c.api.expenseRead({month:report.month,asOf:report.asOf,...(c.property?{propertyId:c.property.id}:report.propertyId?{propertyId:report.propertyId}:{})},c.signal),c.summaryOnly?Promise.resolve(null):c.api.rentalRead({month:report.month,asOf:report.asOf,...(c.property?{propertyId:c.property.id}:{})},c.signal)]);
+  const pending=c.prefetchedExpenses;delete c.prefetchedExpenses;
+  const [result,rental]=pending?await pending.then(outcome=>{if(!outcome.ok)throw outcome.error;return outcome.value;}):await Promise.all([c.api.expenseRead({month:report.month,asOf:report.asOf,...(c.property?{propertyId:c.property.id}:report.propertyId?{propertyId:report.propertyId}:{})},c.signal),c.summaryOnly?Promise.resolve(null):c.api.rentalRead({month:report.month,asOf:report.asOf,...(c.property?{propertyId:c.property.id}:{})},c.signal)]);
   let cursor='',properties=c.property?[c.property]:[];if(!c.property)do{const p=await c.api.list({archiveState:'all',q:'',limit:'100',cursor},c.signal);properties.push(...p.data);cursor=p.nextCursor??'';}while(cursor&&alive(c));
   if(!alive(c)||!await c.verifyAccess()||!alive(c))return;c.data=result.data;c.properties=properties;c.rooms=rental?.data.rooms||[];
   const property=id=>properties.find(p=>p.id===id)?.name||id,room=id=>c.rooms.find(r=>r.id===id)?.code||'Property-level';
