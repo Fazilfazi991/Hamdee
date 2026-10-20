@@ -6,6 +6,7 @@ import { uuid } from './validation';
 import { securityLogger,logSafely,type SecurityLogger } from './security-log';
 import { RentalService } from './rental';
 import { ExpenseService } from './expenses';
+import { PartnerService } from './partners';
 const base='/api/hamdee/v1';
 /** Trusted server compositions only. Each module keeps its financial validation,
  * transaction, audit and command replay inside the existing owner context. */
@@ -39,9 +40,28 @@ export function createHandler(provider:IdentityProvider,service:PropertyService,
       // Also validate enabled membership before parsing untrusted mutation fields.
       // For operational modules, the full owner portfolio grant is checked in
       // this same transaction; it is never inferred from a role name alone.
-      const session=await service.session(identity,Object.hasOwn(modules,moduleName));
+      const session=await service.session(identity,Object.hasOwn(modules,moduleName)||moduleName==='partners');
       requireThat(url.pathname===base||url.pathname.startsWith(base+'/'),404,'NOT_FOUND','Endpoint not found.');
       if(path==='/session'&&request.method==='GET') return json({data:{...session,authenticationProvider:provider.kind||'server-validated'}});
+      if(moduleName==='partners'){
+        const partners=new PartnerService(service),isCommand=path==='/partners/commands';
+        requireThat(path==='/partners'||isCommand,404,'NOT_FOUND','Endpoint not found.');
+        requireThat(request.method===(isCommand?'POST':'GET'),405,'METHOD_NOT_ALLOWED','This method is unavailable.');
+        if(!isCommand){
+          const allowed=['month','asOf','propertyId','partnerId','recordedThrough','entryCursor','partnerCursor','limit'];
+          requireThat([...url.searchParams.keys()].every(k=>allowed.includes(k)&&url.searchParams.getAll(k).length===1),400,'INVALID_QUERY','Check the partner statement filters.');
+          const fields=Object.fromEntries(url.searchParams);
+          const limit=Number(fields.limit??100);
+          requireThat(Number.isInteger(limit)&&limit>=1&&limit<=100,400,'INVALID_QUERY','Choose a page size from 1 to 100.');
+          requireThat(fields.month&&fields.asOf,400,'INVALID_QUERY','Choose a statement month and through date.');
+          return json({data:await partners.overview(identity,{...fields,month:fields.month,asOf:fields.asOf,limit})});
+        }
+        requireThat([...url.searchParams.keys()].length===0,400,'INVALID_QUERY','Command requests do not accept query filters.');
+        requireThat(request.headers.get('origin')===url.origin,403,'ORIGIN_REJECTED','This request origin is not permitted.');
+        const key=request.headers.get('idempotency-key');requireThat(key&&uuid.test(key),400,'IDEMPOTENCY_KEY_REQUIRED','A valid operation key is required.');
+        const result=await partners.mutate(identity,await readJson(request),key,requestId);
+        return json(result,result.status,result.replay?{'Idempotent-Replay':'true'}:{});
+      }
       if(Object.hasOwn(modules,moduleName)){
         const modulePath='/'+moduleName,isCommand=path===modulePath+'/commands',isReceipts=moduleName==='staff-collections'&&path===modulePath+'/receipts';
         requireThat(path===modulePath||isCommand||isReceipts,404,'NOT_FOUND','Endpoint not found.');

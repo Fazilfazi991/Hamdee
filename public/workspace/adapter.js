@@ -37,6 +37,8 @@ export class PropertyApi {
   }
   session(signal){return this.request('/session',{signal});}
   dashboard(signal){return this.request('/dashboard',{signal});}
+  partnerRead(filters,signal){return this.request('/partners?'+new URLSearchParams(filters),{signal});}
+  partnerWrite(body,key,signal){return this.request('/partners/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   staffRead(filters,signal){return this.request('/staff-collections?'+new URLSearchParams(filters),{signal});}
   staffReceipts(filters,signal){return this.request('/staff-collections/receipts?'+new URLSearchParams(filters),{signal});}
   staffWrite(body,key,signal){return this.request('/staff-collections/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}

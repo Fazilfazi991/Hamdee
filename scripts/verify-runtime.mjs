@@ -20,12 +20,13 @@ try{
   const page=await fetch(origin+'/workspace/index.html');assert.equal(page.status,200);assert.match(await page.text(),/Owner access only/);
   const rentalAsset=await fetch(origin+'/workspace/rental.js');assert.equal(rentalAsset.status,200);
   const expenseAsset=await fetch(origin+'/workspace/expenses.js');assert.equal(expenseAsset.status,200);
-  for(const path of ['/api/hamdee/v1/properties','/api/hamdee/v1/rental','/api/hamdee/v1/expenses'])for(const method of ['GET','POST','PATCH','DELETE']){
+  const partnerAsset=await fetch(origin+'/workspace/partners.js');assert.equal(partnerAsset.status,200);
+  for(const path of ['/api/hamdee/v1/properties','/api/hamdee/v1/rental','/api/hamdee/v1/expenses','/api/hamdee/v1/partners','/api/hamdee/v1/partners/commands'])for(const method of ['GET','POST','PATCH','DELETE']){
     const response=await fetch(origin+path,{method,headers:{Authorization:'Bearer synthetic-test-bypass-must-fail',Origin:origin}});
     assert.equal(response.status,503);assert.equal((await response.json()).error.code,'CONFIGURATION_UNAVAILABLE');
     assert.equal(response.headers.get('cache-control'),'private, no-store');assert.equal(response.headers.get('x-content-type-options'),'nosniff');
   }
-  console.log('PASS: built Next runtime; UI/rental/expense modules 200; property/rental/expense GET/POST/PATCH/DELETE remain 503 despite test-auth/shared-venture variables. 15 HTTP response checks.');
+  console.log('PASS: built Next runtime; UI/rental/expense/partner modules 200; property/rental/expense/partner GET/POST/PATCH/DELETE remain 503 despite test-auth/shared-venture variables. 24 HTTP response checks.');
 }finally{
   child.kill();await new Promise(resolve=>{if(child.exitCode!==null||child.signalCode!==null)resolve();else child.once('exit',resolve);});
 }
