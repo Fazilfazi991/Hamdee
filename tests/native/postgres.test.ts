@@ -88,15 +88,23 @@ test('native: concurrent identical creates and ambiguous-response replay commit 
   assert.equal((await owner.query('SELECT count(*)::int AS n FROM hamdee_private.commands WHERE key=$1',[lostKey])).rows[0].n,1);
 });
 
-test('native: two authorized actors read one revision before racing independent UPDATE sessions',native,async()=>{
-  const p=await create();let arrivals=0,release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+test('native: two authorized actors race one revision before the property lock serializes independent sessions',native,async()=>{
+  const p=await create();let arrivals=0,release!:()=>void,fail!:(error:Error)=>void,timer:ReturnType<typeof setTimeout>|undefined;
+  const gate=new Promise<void>((resolve,reject)=>{release=resolve;fail=reject;});
   const racing=(db:Database):Database=>({transaction:work=>db.transaction(sql=>work({query:async<T>(text:string,params?:unknown[])=>{
-    if(text.startsWith('UPDATE hamdee_private.properties')){if(++arrivals===2)release();await gate;}return sql.query<T>(text,params);
+    // Both requests must reach the real lock from independent pools. Waiting at
+    // UPDATE would deadlock the test: the other request cannot pass this lock.
+    if(text.startsWith('SELECT pg_advisory_xact_lock(')&&params?.[0]==='property:'+p.id){
+      if(++arrivals===1)timer=setTimeout(()=>fail(new Error('Both independent requests must reach the property-lock barrier within five seconds.')),5000);
+      if(arrivals===2){clearTimeout(timer);release();}await gate;
+    }return sql.query<T>(text,params);
   }}))});
   const handlers=[a,b].map(db=>createHandler(provider,new PropertyService(racing(db)),()=>{}));
-  const responses=await Promise.all(handlers.map((h,i)=>request(h,i?'admin2':'admin','PATCH','/properties/'+p.id,{name:'Native competing '+i},pre(p))));
+  let responses:Response[];try{responses=await Promise.all(handlers.map((h,i)=>request(h,i?'admin2':'admin','PATCH','/properties/'+p.id,{name:'Native competing '+i},pre(p))));}finally{clearTimeout(timer);}
+  assert.equal(arrivals,2,'Two independently authorized requests reached the real property lock');
   assert.deepEqual(responses.map(r=>r.status).sort(),[200,412]);
   assert.equal((await owner.query('SELECT version FROM hamdee_private.properties WHERE id=$1',[p.id])).rows[0].version,2);
+  for(const table of ['property_revisions','audit_events'])assert.equal((await owner.query('SELECT count(*)::int AS n FROM hamdee_private.'+table+' WHERE property_id=$1 AND version=2',[p.id])).rows[0].n,1);
 });
 
 test('native: audit insertion failure rolls back create and update with retry recovery',native,async()=>{

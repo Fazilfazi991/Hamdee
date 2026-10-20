@@ -57,7 +57,7 @@ async function loadProperties(c){
 function paint(c){
   const property=id=>c.properties.find(p=>p.id===id)?.name||id;
   const partner=id=>c.data.partnerLabels?.[id]||c.contacts.get(id)?.name||id;
-  const historyDetail=event=>{const r=event.detail.record;return event.action==='record-entry'?[r.kind,`${r.currency} ${r.amount}`,r.entry_date,r.reference,r.notes].filter(Boolean).map(esc).join('<br>'):event.action==='link-property'?esc(r.notes||'Property association recorded'):[`Contact revision ${r.version}`,r.name,r.phone,r.email,r.notes].filter(Boolean).map(esc).join('<br>');};
+  const historyDetail=event=>{const r=event.detail.record;return event.action==='record-entry'?[r.kind,`${r.currency} ${r.amount}`,r.entry_date,r.reference,r.notes,event.detail.legitimateRepeat?'Separate legitimate repeat confirmed':''].filter(Boolean).map(esc).join('<br>'):event.action==='correct-entry'?[r.replacement_entry_id?'Original retained and replaced':'Original retained and voided',r.reason].map(esc).join('<br>'):event.action==='link-property'?esc(r.notes||'Property association recorded'):[`Contact revision ${r.version}`,r.name,r.phone,r.email,r.notes].filter(Boolean).map(esc).join('<br>');};
   const properties=c.properties.map(p=>[p.id,p.name]);
   const choices=[...c.contacts.values()].map(p=>[p.id,p.name]);if(c.report.partnerId&&!choices.some(([id])=>id===c.report.partnerId))choices.push([c.report.partnerId,partner(c.report.partnerId)]);
   const filterSelect=(name,label,values,selected,all)=>`<label>${esc(label)}<select name="${name}"><option value="">${all}</option>${values.map(([id,name])=>`<option value="${esc(id)}" ${id===selected?'selected':''}>${esc(name)}</option>`).join('')}</select></label>`;
@@ -85,10 +85,10 @@ function paint(c){
     panel('Partner contacts','Contacts are business records without logins. Similar names remain separate identities.',table(['Partner','Phone','Email','Notes','Revision','Actions'],c.catalog.partners.map(p=>[esc(p.name),esc(p.phone||'—'),esc(p.email||'—'),esc(p.notes||'—'),esc(p.version),button('Edit contact','update-partner',p.id)]),'Partner contact register')+
       `<div class="table-foot"><span>Contact page — use the next page for additional contact choices.</span>${c.catalog.nextPartnerCursor?button('Next contacts','next-contacts'):''}${c.partnerCursor?button('First contacts','first-contacts'):''}</div>`,button('Add partner contact','create-partner','',true))+
     panel('Property links','A link identifies the project association. It creates no share, entitlement or automatic allocation.',table(['Property','Partner','Linked','Notes'],c.data.links.map(l=>[esc(property(l.propertyId)),esc(partner(l.partnerId)),esc(l.createdAt),esc(l.notes||'—')]),'Partner property links'),button('Link partner to property','link-property'))+
-    panel('Contribution and withdrawal history','Original entries are preserved. Statement totals include all matching saved entries, beyond this page.',
-      table(['Movement date','Property','Partner','Type','Amount','Reference','Notes','Recorded'],c.data.entries.map(e=>[esc(e.entryDate),esc(property(e.propertyId)),esc(partner(e.partnerId)),esc(e.kind),money(e.amount,e.currency),esc(e.reference||'—'),esc(e.notes||'—'),esc(e.recordedAt)]),'Partner movement history')+
+    panel('Contribution and withdrawal history','Original entries are preserved. Statements use effective entries only; corrections retain their reason and replacement link.',
+      table(['Movement date','Property','Partner','Type','Amount','Reference','Notes','Recorded','Status / correction'],c.data.entries.map(e=>[esc(e.entryDate),esc(property(e.propertyId)),esc(partner(e.partnerId)),esc(e.kind),money(e.amount,e.currency),esc(e.reference||'—'),esc(e.notes||'—'),esc(e.recordedAt),e.effective===false?'Corrected · Original retained':button('Void entry','void-entry',e.id)+button('Replace entry','replace-entry',e.id)]),'Partner movement history')+
       `<div class="table-foot"><span>${c.data.entries.length} entries on this page</span>${c.data.nextEntryCursor?button('Next entries','next-entries'):''}${c.entryCursor?button('First entries','first-entries'):''}</div>`,button('Record contribution / withdrawal','record-entry','',true))+
-    panel('Change history','Previous contact details, property links and recorded movements remain available.',table(['Action','Partner','Property','Recorded details','Recorded'],c.data.history.map(e=>[esc(({'create-partner':'Contact added','update-partner':'Contact updated','link-property':'Property linked','record-entry':'Movement recorded'})[e.action]||e.action),esc(partner(e.partnerId)),esc(e.propertyId?property(e.propertyId):'Contact record'),historyDetail(e),esc(e.occurredAt)]),'Partner change history')+(c.data.historyHasMore?'<p class="partner-help">Showing the most recent changes. More contribution and withdrawal entries are available above.</p>':''));
+    panel('Change history','Previous contact details, property links and recorded movements remain available.',table(['Action','Partner','Property','Recorded details','Recorded'],c.data.history.map(e=>[esc(({'create-partner':'Contact added','update-partner':'Contact updated','link-property':'Property linked','record-entry':'Movement recorded','correct-entry':'Entry corrected'})[e.action]||e.action),esc(partner(e.partnerId)),esc(e.propertyId?property(e.propertyId):'Contact record'),historyDetail(e),esc(e.occurredAt)]),'Partner change history')+(c.data.historyHasMore?'<p class="partner-help">Showing the most recent changes. More contribution and withdrawal entries are available above.</p>':''));
 }
 async function click(c,event){
   const trigger=event.target.closest('[data-partner-action]');if(!trigger||!alive(c))return;const action=trigger.dataset.partnerAction;
@@ -119,6 +119,12 @@ function open(c,action,id,trigger){
       field('currency','Explicit currency code','text','',true,'pattern="[A-Z]{3}" maxlength="3" placeholder="e.g. QAR"')+
       field('reference','Reference (optional)','text','',false,'maxlength="200"');
     body+=field('notes','Notes (optional)','text','',false,'maxlength="2000"');
+  }else if(action==='void-entry'||action==='replace-entry'){
+    const entry=c.data.entries.find(e=>e.id===id);if(!entry||entry.effective===false)return;const replace=action==='replace-entry';title=replace?'Replace recorded movement':'Void recorded movement';action='correct-entry';
+    Object.assign(hidden,{entryId:entry.id,replacement:replace?true:null});
+    body=`<p class="partner-help">Original retained: ${esc(entry.kind)} · ${esc(entry.entryDate)} · ${money(entry.amount,entry.currency)} · ${esc(entry.reference||'No reference')}. ${replace?'The replacement uses this same property and partner.':'This removes its effect from a refreshed statement without creating an opposite movement.'}</p>`+
+      field('reason','Correction reason','text','',true,'maxlength="2000"');
+    if(replace)body+=select('kind','Correct movement type',[['contribution','Contribution'],['withdrawal','Withdrawal']],entry.kind)+field('entryDate','Correct movement date','date',entry.entryDate)+field('amount','Correct recorded amount','text',entry.amount,true,'inputmode="decimal"')+field('currency','Correct currency code','text',entry.currency,true,'pattern="[A-Z]{3}" maxlength="3"')+field('reference','Correct reference (optional)','text',entry.reference||'',false,'maxlength="200"')+field('notes','Correct notes (optional)','text',entry.notes||'',false,'maxlength="2000"');
   }else return;
   const d=document.createElement('dialog');d.className='partner-record-dialog';d.setAttribute('aria-labelledby','partner-dialog-title');
   d.innerHTML=`<form data-partner-write><header class="dialog-header"><div><span class="eyebrow">HAMDEE PARTNER RECORDS</span><h2 id="partner-dialog-title">${title}</h2></div><button type="button" class="icon-button" data-partner-close aria-label="Close partner form">×</button></header><div class="rental-dialog-body"><p class="partner-help">${action==='record-entry'?note+' Link the partner to this property first. Amounts are stored exactly without rounding; no default currency.':'Saved record changes retain history. This creates no login or financial entitlement.'}</p><div class="form-grid">${body}</div></div><p data-partner-error role="alert" tabindex="-1"></p><div data-partner-conflict></div><footer><button class="button subtle" type="button" data-partner-close>Cancel</button><button class="button primary" type="submit">Save partner record</button></footer></form>`;
@@ -130,6 +136,9 @@ function open(c,action,id,trigger){
 async function save(c,event){
   event.preventDefault();if(!alive(c)||c.writer||!c.state)return;const state=c.state;
   let body={action:state.action,...state.hidden,...Object.fromEntries(new FormData(event.target))};
+  if(state.action==='correct-entry'){
+    const fields=Object.fromEntries(new FormData(event.target));body={action:state.action,entryId:state.hidden.entryId,reason:fields.reason,replacement:state.hidden.replacement===null?null:{kind:fields.kind,entryDate:fields.entryDate,amount:fields.amount,currency:fields.currency,reference:fields.reference,notes:fields.notes},...(fields.legitimateRepeat?{legitimateRepeat:fields.legitimateRepeat==='true'}:{})};
+  }else if('legitimateRepeat' in body)body.legitimateRepeat=body.legitimateRepeat==='true';
   if(state.pending?.uncertain)body=state.pending.body;
   const signature=JSON.stringify(body);if(state.pending?.signature!==signature)state.pending={body,key:crypto.randomUUID(),signature,uncertain:false};
   const controller=new window.AbortController();c.writer=controller;const submit=event.target.querySelector('[type=submit]'),error=event.target.querySelector('[data-partner-error]');submit.disabled=true;error.textContent='';
@@ -143,6 +152,11 @@ async function save(c,event){
       state.needsProof=true;error.textContent='Session verification expired. Verify your session, then save this draft explicitly.';error.focus();
       const region=event.target.querySelector('[data-partner-conflict]');region.replaceChildren();const verify=document.createElement('button');verify.type='button';verify.className='button subtle';verify.textContent='Verify session';region.append(verify);
       verify.addEventListener('click',async()=>{verify.disabled=true;try{if(!await verified(c)||c.state!==state)return;state.needsProof=false;submit.disabled=false;region.replaceChildren();error.textContent='Session verification renewed. Review your draft, then save explicitly.';}catch(failure){if(!alive(c))return;error.textContent=message(failure);verify.disabled=false;}},{signal:c.local.signal});return;
+    }
+    if(cause.code==='DUPLICATE_PARTNER_ENTRY'){
+      const region=event.target.querySelector('[data-partner-conflict]');
+      if(!region.querySelector('[name="legitimateRepeat"]'))region.innerHTML='<label class="operations-confirmation"><input type="checkbox" name="legitimateRepeat" value="true"> I confirm this is a separate legitimate movement with the same details.</label>';
+      error.textContent=cause.message+' Review the existing history. Confirm the separate movement only when appropriate, then save explicitly.';error.focus();return;
     }
     if([401,403].includes(cause.status)){await accessLoss(c,cause);return;}
     state.pending.uncertain=!!cause.uncertain||!cause.status||cause.status>=500;

@@ -80,10 +80,30 @@ test('Proposed partner008 refuses a nonbypass schema owner rather than fingerpri
 });
 test('Proposed hosted008 model executes through restricted LOGIN, SET LOCAL ROLE and current owner guards without posting finance entries',async t=>{
   const pg=await hostedPartnerModel();t.after(()=>pg.close());const actor=randomUUID(),identity={issuer:'https://dytlzfwbgeuhzgzemqsf.supabase.co/auth/v1',subject:randomUUID()};
-  await pg.query("INSERT INTO hamdee_private.app_users(id,issuer,subject,display_name,enabled) VALUES($1,$2,$3,'Synthetic hosted model owner',true)",[actor,identity.issuer,identity.subject]);await pg.query("INSERT INTO hamdee_private.role_assignments(id,user_id,role,portfolio) VALUES($1,$2,'admin',true)",[randomUUID(),actor]);await pg.exec(await migrationFile('hosted/partner_records_development.sql'));await pg.exec('SET SESSION AUTHORIZATION hamdee_backend');
+  await pg.query("INSERT INTO hamdee_private.app_users(id,issuer,subject,display_name,enabled) VALUES($1,$2,$3,'Synthetic hosted model owner',true)",[actor,identity.issuer,identity.subject]);await pg.query("INSERT INTO hamdee_private.role_assignments(id,user_id,role,portfolio) VALUES($1,$2,'admin',true)",[randomUUID(),actor]);await pg.exec(await migrationFile('hosted/partner_records_development.sql'));await pg.exec(await migrationFile('hosted/partner_corrections_development.sql'));await pg.exec('SET SESSION AUTHORIZATION hamdee_backend');
   const database:Database={transaction:work=>pg.transaction(tx=>guardHostedTransaction({query:async<R>(sql:string,params?:unknown[])=>({rows:(await tx.query<R>(sql,params)).rows})},work))};
   const properties=new PropertyService(database,identity,'synthetic-development'),partners=new PartnerService(properties);const p=await properties.mutate(identity,{action:'create',body:{name:'Synthetic partner hosted model property'},key:randomUUID(),requestId:randomUUID()});const contact=await partners.mutate(identity,{action:'create-partner',name:'Synthetic hosted model partner'},randomUUID(),randomUUID());await partners.mutate(identity,{action:'link-property',propertyId:p.data.id,partnerId:contact.data.id},randomUUID(),randomUUID());await partners.mutate(identity,{action:'record-entry',propertyId:p.data.id,partnerId:contact.data.id,kind:'contribution',entryDate:'2026-10-01',amount:'0.000000000001',currency:'XTS'},randomUUID(),randomUUID());
   assert.equal((await partners.overview(identity,query)).currencies[0].recordedNet,'0.000000000001');assert.equal((await database.transaction(sql=>sql.query<{n:number}>('SELECT count(*)::int AS n FROM hamdee_private.ops_money'))).rows[0].n,0);
+});
+test('Proposed009 wrapper pins exact local009 and only the two intentional partner action CHECK changes',async t=>{
+  const local=(await migrationFile('009_local_partner_corrections.up.sql')).replace(/\r\n/g,'\n'),wrapper=await migrationFile('hosted/partner_corrections_development.sql');assert.equal(wrapper.split('$reviewed_009$')[1],local);assert.ok(wrapper.includes(createHash('sha256').update(local).digest('hex')));
+  const pg=await hostedPartnerModel();t.after(()=>pg.close());await pg.exec(await migrationFile('hosted/partner_records_development.sql'));
+  await pg.query("INSERT INTO hamdee_private.app_users(id,issuer,subject,display_name,enabled) VALUES($1,'synthetic','synthetic-preservation009','Synthetic retained009',true)",[randomUUID()]);
+  const before=(await pg.query('SELECT * FROM hamdee_private.app_users ORDER BY id')).rows;
+  const constraints=(await pg.query("SELECT conrelid,conname,pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE connamespace='hamdee_private'::regnamespace AND NOT (conrelid='hamdee_private.partner_events'::regclass AND conname IN('partner_events_action_check','partner_events_check')) ORDER BY conrelid,conname")).rows;
+  await pg.exec(wrapper);assert.equal((await pg.query<{n:number}>("SELECT count(*)::int AS n FROM pg_class WHERE relnamespace='hamdee_private'::regnamespace AND relkind='r'")).rows[0].n,48);assert.deepEqual((await pg.query('SELECT * FROM hamdee_private.app_users ORDER BY id')).rows,before);
+  const after=(await pg.query("SELECT conrelid,conname,pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE connamespace='hamdee_private'::regnamespace AND conrelid<>'hamdee_private.partner_entry_corrections'::regclass AND NOT (conrelid='hamdee_private.partner_events'::regclass AND conname IN('partner_events_action_check','partner_events_check')) ORDER BY conrelid,conname")).rows;assert.deepEqual(after,constraints);
+  assert.deepEqual((await pg.query("SELECT relrowsecurity,relforcerowsecurity,has_table_privilege('hamdee_runtime',oid,'SELECT') AS read,has_table_privilege('hamdee_runtime',oid,'INSERT') AS insert,has_table_privilege('hamdee_runtime',oid,'UPDATE,DELETE,TRUNCATE') AS change FROM pg_class WHERE oid='hamdee_private.partner_entry_corrections'::regclass")).rows[0],{relrowsecurity:true,relforcerowsecurity:true,read:true,insert:true,change:false});
+  await assert.rejects(pg.exec(wrapper),/unexpected008 constraint state|existing\/partial009/);await pg.exec('ROLLBACK');
+});
+test('Proposed009 rejects unreviewed existing CHECK drift and preservation changes atomically',async t=>{
+  for(const drift of [true,false]){
+    const pg=await hostedPartnerModel();try{await pg.exec(await migrationFile('hosted/partner_records_development.sql'));const actor=randomUUID();await pg.query("INSERT INTO hamdee_private.app_users(id,issuer,subject,display_name,enabled) VALUES($1,'synthetic','synthetic-009-proof','Synthetic009 proof',true)",[actor]);let script=await migrationFile('hosted/partner_corrections_development.sql');
+      if(drift)await pg.exec("ALTER TABLE hamdee_private.partner_events DROP CONSTRAINT partner_events_action_check;ALTER TABLE hamdee_private.partner_events ADD CONSTRAINT partner_events_action_check CHECK(length(action)>0)");
+      else script=script.replace('EXECUTE replace(reviewed_source,source_guard,hosted_guard);',"EXECUTE replace(reviewed_source,source_guard,hosted_guard);UPDATE hamdee_private.app_users SET display_name='Unexpected alteration';");
+      await assert.rejects(pg.exec(script),drift?/unexpected008 constraint state/:/existing record changed/);await pg.exec('ROLLBACK');assert.equal((await pg.query<{display_name:string}>('SELECT display_name FROM hamdee_private.app_users WHERE id=$1',[actor])).rows[0].display_name,'Synthetic009 proof');assert.equal((await pg.query<{installed:string|null}>("SELECT to_regclass('hamdee_private.partner_entry_corrections') AS installed")).rows[0].installed,null);
+    }finally{await pg.close();}
+  }void t;
 });
 test('Partner contacts: duplicate names stay distinct; revision preserves old contact snapshot and stale updates reject', async t => {
   const f = await setup(t), a = await f.contact(), b = await f.contact(); assert.notEqual(a.id, b.id);
@@ -138,9 +158,33 @@ test('Retry safety: same command/key commits once, changed command conflicts, no
   const a = await f.write(body, key), b = await f.write({ ...body, amount: '1.23' }, key); assert.equal(a.data.id, b.data.id); assert.equal(b.replay, true);
   await assert.rejects(f.write({ ...body, amount: '2' }, key), code('IDEMPOTENCY_KEY_REUSED'));
   assert.equal((await f.partners.overview(f.identity, query)).entries.length, 1);
-  // Same reference/date/value under a NEW key is a separate explicit record;
-  // no unapproved global reference or transaction-identity rule is inferred.
-  await f.write(body); assert.equal((await f.partners.overview(f.identity, query)).entries.length, 2);
+  // A new key is a new attempt, not proof that an identical movement is real.
+  await assert.rejects(f.write(body),code('DUPLICATE_PARTNER_ENTRY'));
+  await f.write({...body,legitimateRepeat:true}); assert.equal((await f.partners.overview(f.identity, query)).entries.length, 2);
+});
+test('Confirmed repeats retain explicit evidence; the same key replays before the duplicate warning',async t=>{
+  const f=await project(t),key=randomUUID(),body={action:'record-entry',propertyId:f.p.id,partnerId:f.partner.id,kind:'contribution',entryDate:'2026-10-05',amount:'12.34',currency:'XTS',reference:'SYNTHETIC-RECEIPT'};
+  const first=await f.write(body,key);assert.equal((await f.write(body,key)).data.id,first.data.id);
+  await assert.rejects(f.write({...body,notes:'Different notes cannot conceal the same movement'}),code('DUPLICATE_PARTNER_ENTRY'));
+  await f.write({...body,legitimateRepeat:true});const report=await f.partners.overview(f.identity,query);assert.equal(report.currencies[0].recordedNet,'24.68');
+  const repeat=report.history.find(e=>(e.detail as Row).legitimateRepeat===true)!;assert.ok(repeat);assert.deepEqual((repeat.detail as Row).duplicateEntryIds,[first.data.id]);
+});
+test('Retained correction atomically replaces then voids an entry while pinned statements preserve their earlier view',async t=>{
+  const f=await project(t),first=await f.entry(f.p.id,f.partner.id,{amount:'10.25'}),pinned=await f.partners.overview(f.identity,query),key=randomUUID();
+  const correction={action:'correct-entry',entryId:first.data.id,reason:'Synthetic amount correction',replacement:{kind:'contribution',entryDate:'2026-10-05',amount:'11.123456789012',currency:'XTS',reference:'SYNTHETIC',notes:'Reviewed replacement'}};
+  const saved=await f.write(correction,key);assert.equal((await f.write(correction,key)).data.id,saved.data.id);
+  const report=await f.partners.overview(f.identity,query);assert.equal(report.entries.length,2);assert.equal(report.corrections.length,1);assert.equal(report.currencies[0].recordedNet,'11.123456789012');assert.equal(report.entries.filter(e=>e.effective).length,1);
+  const replacement=report.entries.find(e=>e.id===saved.data.replacementEntryId)!;assert.ok(replacement);assert.equal(replacement.recordedAt,report.corrections[0].correctedAt);
+  const before=await f.partners.overview(f.identity,{...query,recordedThrough:pinned.recordedThrough});assert.equal(before.entries.length,1);assert.equal(before.corrections.length,0);assert.equal(before.currencies[0].recordedNet,'10.25');
+  await assert.rejects(f.write({...correction,reason:'Second correction'}),code('ENTRY_ALREADY_CORRECTED'));
+  await f.write({action:'correct-entry',entryId:replacement.id,reason:'Synthetic void with original retained',replacement:null});const voided=await f.partners.overview(f.identity,query);assert.equal(voided.entries.length,2);assert.equal(voided.entries.filter(e=>e.effective).length,0);assert.deepEqual(voided.currencies,[]);assert.equal(voided.corrections.length,2);
+  assert.equal((await f.pg.query<{amount:string}>('SELECT amount::text AS amount FROM hamdee_private.partner_entries WHERE id=$1',[first.data.id])).rows[0].amount,'10.25');
+});
+test('Failed correction audit rolls back replacement and void link, retaining the original effective amount',async t=>{
+  const f=await project(t),first=await f.entry(f.p.id,f.partner.id,{amount:'4'}),base=adapter(f.pg);
+  const database:Database={transaction:work=>base.transaction(sql=>work({query(statement,params){if(statement.startsWith('INSERT INTO hamdee_private.partner_events')&&params?.[4]==='correct-entry')throw new Error('Synthetic correction audit failure');return sql.query(statement,params);}}))};
+  const service=new PartnerService(new PropertyService(database,f.identity));await assert.rejects(service.mutate(f.identity,{action:'correct-entry',entryId:first.data.id,reason:'Synthetic correction',replacement:{kind:'withdrawal',entryDate:'2026-10-05',amount:'8',currency:'XTS'}},randomUUID(),randomUUID()),/Synthetic correction audit failure/);
+  const report=await f.partners.overview(f.identity,query);assert.equal(report.entries.length,1);assert.deepEqual(report.corrections,[]);assert.equal(report.currencies[0].recordedNet,'4');
 });
 test('Input allowlists: reject financial settings, client authority, impossible dates, missing/invalid currency and invalid query', async t => {
   const f = await project(t);
@@ -286,7 +330,7 @@ test('Standalone partner UI: desktop/mobile actual service flow, safe rendering,
     await page.getByRole('status').filter({ hasText: 'Partner record saved.' }).waitFor(); assert.equal(await page.locator('td').filter({ hasText: '<script>SYNTHETIC</script>' }).count() >= 1, true);
     await page.getByRole('button', { name: 'Record contribution / withdrawal', exact: true }).click();
     await page.getByLabel('Property', { exact: true }).last().selectOption(String(p.id)); await page.getByLabel('Partner', { exact: true }).selectOption(String(partner.id)); await page.getByLabel('Recorded movement').selectOption('contribution');
-    await page.getByLabel('Movement date', { exact: true }).fill('2026-10-15'); await page.getByLabel('Exact recorded amount').fill('10.123456'); await page.getByLabel('Explicit currency code').fill('XTS');
+    await page.getByLabel('Movement date', { exact: true }).fill(width===1440?'2026-10-15':'2026-10-16'); await page.getByLabel('Exact recorded amount').fill('10.123456'); await page.getByLabel('Explicit currency code').fill('XTS');
     const saveBounds = await page.getByRole('button', { name: 'Save partner record', exact: true }).boundingBox(); assert.ok(saveBounds && saveBounds.y >= 0 && saveBounds.y + saveBounds.height <= 900, 'Save remains within the viewport while form fields scroll');
     await page.screenshot({ path: `evidence/partners-form-${width}.png`, fullPage: true });
     await page.getByRole('button', { name: 'Save partner record', exact: true }).click();

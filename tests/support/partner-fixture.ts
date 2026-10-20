@@ -6,7 +6,7 @@ import { PropertyService } from '../../src/service';
 export const partnerMigration = () => readFile(new URL('../../migrations/008_local_partner_records.up.sql', import.meta.url), 'utf8');
 export async function partnerFixture(persistent = false) {
   const f = await fixture(persistent);
-  await f.pg.transaction(async tx => { await tx.exec(await partnerMigration()); });
+  await f.pg.transaction(async tx => { await tx.exec(await partnerMigration());await tx.exec(await readFile(new URL('../../migrations/009_local_partner_corrections.up.sql',import.meta.url),'utf8')); });
   const identity = { issuer, subject: f.users.admin.subject };
   const ownerProperties = new PropertyService(adapter(f.pg), identity);
   const partners = new PartnerService(ownerProperties);

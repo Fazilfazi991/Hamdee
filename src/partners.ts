@@ -40,10 +40,21 @@ function normalized(input: unknown): Row {
     'create-partner': ['name', 'phone', 'email', 'notes'],
     'update-partner': ['partnerId', 'expectedVersion', 'name', 'phone', 'email', 'notes'],
     'link-property': ['propertyId', 'partnerId', 'notes'],
-    'record-entry': ['propertyId', 'partnerId', 'kind', 'entryDate', 'amount', 'currency', 'reference', 'notes'],
+    'record-entry': ['propertyId', 'partnerId', 'kind', 'entryDate', 'amount', 'currency', 'reference', 'notes','legitimateRepeat'],
+    'correct-entry':['entryId','reason','replacement','legitimateRepeat'],
   };
   check(typeof action === 'string' && Object.hasOwn(allow, action) && Object.keys(b).every(k => k === 'action' || allow[action].includes(k)), 'Unknown operation or fields.');
   const result: Row = { action };
+  if('legitimateRepeat' in b)check(typeof b.legitimateRepeat==='boolean','Confirm a legitimate repeated movement explicitly.');
+  if(action==='correct-entry'){
+    result.entryId=id(b.entryId);result.reason=text(b.reason,2000);result.legitimateRepeat=b.legitimateRepeat===true;
+    check(b.replacement===null||(b.replacement&&typeof b.replacement==='object'&&!Array.isArray(b.replacement)),'Choose void or explicit replacement details.');
+    if(b.replacement===null)result.replacement=null;
+    else{const r=b.replacement as Row;check(Object.keys(r).every(k=>['kind','entryDate','amount','currency','reference','notes'].includes(k)),'Unknown replacement fields.');
+      const currency=text(r.currency,3);check(/^[A-Z]{3}$/.test(currency),'Enter an explicit three-letter currency code.');check(r.kind==='contribution'||r.kind==='withdrawal','Choose recorded contribution or withdrawal.');
+      result.replacement={kind:r.kind,entryDate:date(r.entryDate),amount:partnerAmount(r.amount),currency,reference:text(r.reference??'',200,false),notes:text(r.notes??'',2000,false)};
+    }return result;
+  }
   if (action !== 'create-partner') result.partnerId = id(b.partnerId);
   if (action === 'create-partner' || action === 'update-partner') {
     if (action === 'update-partner') {
@@ -60,7 +71,7 @@ function normalized(input: unknown): Row {
     if (action === 'record-entry') {
       check(b.kind === 'contribution' || b.kind === 'withdrawal', 'Choose recorded contribution or withdrawal.');
       const currency = text(b.currency, 3); check(/^[A-Z]{3}$/.test(currency), 'Enter an explicit three-letter currency code.');
-      Object.assign(result, { kind: b.kind, entryDate: date(b.entryDate), amount: partnerAmount(b.amount), currency, reference: text(b.reference ?? '', 200, false) });
+      Object.assign(result, { kind: b.kind, entryDate: date(b.entryDate), amount: partnerAmount(b.amount), currency, reference: text(b.reference ?? '', 200, false),legitimateRepeat:b.legitimateRepeat===true });
     }
   }
   return result;
@@ -74,13 +85,22 @@ export class PartnerService {
     check(typeof requestId === 'string' && uuid.test(requestId), 'Use a valid request identifier.', 'INVALID_REQUEST', 400);
     const b = normalized(input), digest = hash({ api: 'partners-v1', body: b });
     return this.properties.ownerContext(identity, async (sql, actorId) => {
+      // Shared with statement readers: a pinned cutoff cannot land before a
+      // pending correction commits and later admit only one side of its pair.
+      await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['partner-statements']);
       await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', ['partner-command:' + actorId + ':' + key]);
-      if (b.propertyId) await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', ['property:' + b.propertyId]);
-      if (b.partnerId) await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', ['partner:' + b.partnerId]);
       const saved = (await sql.query<{ digest: string; result: { data: Row; status: number; replay: boolean } }>(
         'SELECT digest,result FROM hamdee_private.partner_commands WHERE actor_id=$1 AND key=$2', [actorId, key])).rows[0];
       // ownerContext always revalidates enabled owner membership/session on replay.
       if (saved) { check(saved.digest === digest, 'Use a new operation key for a changed submission.', 'IDEMPOTENCY_KEY_REUSED', 409); return { ...saved.result, replay: true }; }
+      let original:Row|undefined;
+      if(b.action==='correct-entry'){
+        original=(await sql.query<Row>('SELECT *,amount::text AS amount FROM hamdee_private.partner_entries WHERE id=$1',[b.entryId])).rows[0];check(original,'Movement not found.','NOT_FOUND',404);
+        check(!(await sql.query('SELECT id FROM hamdee_private.partner_entry_corrections WHERE original_entry_id=$1',[b.entryId])).rows.length,'This movement already has a retained correction.','ENTRY_ALREADY_CORRECTED',409);
+        b.propertyId=original.property_id;b.partnerId=original.partner_id;
+      }
+      if (b.propertyId) await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', ['property:' + b.propertyId]);
+      if (b.partnerId) await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', ['partner:' + b.partnerId]);
       let current: Row | undefined;
       if (b.partnerId) {
         current = (await sql.query<Row>('SELECT * FROM hamdee_private.partners WHERE id=$1', [b.partnerId])).rows[0];
@@ -92,6 +112,14 @@ export class PartnerService {
         check(p.lifecycle_status === 'registered', 'Restore the property before recording a new partner link or movement.', 'PROPERTY_ARCHIVED', 409);
       }
       const eventId = randomUUID(), partnerId = String(b.partnerId ?? randomUUID());
+      const duplicates=async(value:Row)=>{
+        const matches=(await sql.query<{id:string}>(`SELECT e.id FROM hamdee_private.partner_entries e WHERE e.property_id=$1 AND e.partner_id=$2
+          AND e.kind=$3 AND e.entry_date=$4::date AND e.amount=$5::numeric AND e.currency=$6 AND e.reference=$7
+          AND ($8::uuid IS NULL OR e.id<>$8) AND NOT EXISTS(SELECT 1 FROM hamdee_private.partner_entry_corrections c WHERE c.original_entry_id=e.id) ORDER BY e.id`,
+          [b.propertyId,partnerId,value.kind,value.entryDate,value.amount,value.currency,value.reference,b.action==='correct-entry'?b.entryId:null])).rows;
+        check(!matches.length||b.legitimateRepeat===true,'An identical effective movement already exists. Confirm only if this is a separate legitimate movement.','DUPLICATE_PARTNER_ENTRY',409);return matches.map(r=>r.id);
+      };
+      let repeated:string[]=[],stamp:string|null=null;
       let row: Row, entityId = partnerId;
       if (b.action === 'create-partner') {
         row = (await sql.query<Row>(`INSERT INTO hamdee_private.partners(id,name,phone,email,notes,created_by,event_id)
@@ -107,21 +135,35 @@ export class PartnerService {
         entityId = randomUUID();
         row = (await sql.query<Row>(`INSERT INTO hamdee_private.property_partners(id,property_id,partner_id,notes,event_id)
           VALUES($1,$2,$3,$4,$5) RETURNING *`, [entityId, b.propertyId, partnerId, b.notes, eventId])).rows[0];
+      } else if(b.action==='correct-entry'){
+        stamp=(await sql.query<{stamp:string}>(`SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS stamp`)).rows[0].stamp;
+        const replacement=b.replacement as Row|null;let replacementId:string|null=null;
+        if(replacement){
+          repeated=await duplicates(replacement);replacementId=randomUUID();const replacementEvent=randomUUID();
+          await sql.query(`INSERT INTO hamdee_private.partner_entries(id,property_id,partner_id,kind,entry_date,amount,currency,reference,notes,event_id,recorded_at)
+            VALUES($1,$2,$3,$4,$5,$6::numeric,$7,$8,$9,$10,$11::timestamptz)`,[replacementId,b.propertyId,partnerId,replacement.kind,replacement.entryDate,replacement.amount,replacement.currency,replacement.reference,replacement.notes,replacementEvent,stamp]);
+          const evidence=(await sql.query<{detail:Row}>(`SELECT to_jsonb(r)-'event_id'-'amount'||jsonb_build_object('amount',r.amount::text) AS detail FROM hamdee_private.partner_entries r WHERE id=$1`,[replacementId])).rows[0].detail;
+          await sql.query(`INSERT INTO hamdee_private.partner_events(id,partner_id,property_id,entity_id,action,detail,actor_id,occurred_at)
+            VALUES($1,$2,$3,$4,'record-entry',$5,$6,$7::timestamptz)`,[replacementEvent,partnerId,b.propertyId,replacementId,JSON.stringify({record:evidence,requestId,replacesEntryId:b.entryId,legitimateRepeat:b.legitimateRepeat,duplicateEntryIds:repeated}),actorId,stamp]);
+        }
+        entityId=randomUUID();row=(await sql.query<Row>(`INSERT INTO hamdee_private.partner_entry_corrections(id,original_entry_id,replacement_entry_id,property_id,partner_id,reason,actor_id,event_id,corrected_at)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz) RETURNING *`,[entityId,b.entryId,replacementId,b.propertyId,partnerId,b.reason,actorId,eventId,stamp])).rows[0];
       } else {
         check((await sql.query('SELECT id FROM hamdee_private.property_partners WHERE property_id=$1 AND partner_id=$2', [b.propertyId, partnerId])).rows.length,
           'Link the partner to this property before recording a movement.', 'PARTNER_NOT_LINKED', 409);
         entityId = randomUUID();
+        repeated=await duplicates(b);
         row = (await sql.query<Row>(`INSERT INTO hamdee_private.partner_entries(id,property_id,partner_id,kind,entry_date,amount,currency,reference,notes,event_id)
           VALUES($1,$2,$3,$4,$5,$6::numeric,$7,$8,$9,$10) RETURNING *,amount::text AS amount`,
         [entityId, b.propertyId, partnerId, b.kind, b.entryDate, b.amount, b.currency, b.reference, b.notes, eventId])).rows[0];
       }
       // SQL-generated JSON preserves database timestamp/date representation in
       // evidence; entry amounts stay strings, never JSON binary-float numbers.
-      const table = b.action === 'create-partner' || b.action === 'update-partner' ? 'partners' : b.action === 'link-property' ? 'property_partners' : 'partner_entries';
+      const table = b.action === 'create-partner' || b.action === 'update-partner' ? 'partners' : b.action === 'link-property' ? 'property_partners' : b.action==='correct-entry'?'partner_entry_corrections':'partner_entries';
       const evidence = (await sql.query<{ detail: Row }>(`SELECT (to_jsonb(r)-'event_id'${table === 'partner_entries' ? "-'amount'||jsonb_build_object('amount',r.amount::text)" : ''}) AS detail
         FROM hamdee_private.${table} r WHERE id=$1`, [entityId])).rows[0].detail;
-      await sql.query(`INSERT INTO hamdee_private.partner_events(id,partner_id,property_id,entity_id,action,detail,actor_id)
-        VALUES($1,$2,$3,$4,$5,$6,$7)`, [eventId, partnerId, b.propertyId ?? null, entityId, b.action, JSON.stringify({ record: evidence, requestId }), actorId]);
+      await sql.query(`INSERT INTO hamdee_private.partner_events(id,partner_id,property_id,entity_id,action,detail,actor_id,occurred_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,coalesce($8::timestamptz,clock_timestamp()))`, [eventId, partnerId, b.propertyId ?? null, entityId, b.action, JSON.stringify({ record: evidence, requestId,...(b.action==='record-entry'?{legitimateRepeat:b.legitimateRepeat,duplicateEntryIds:repeated}:{}) }), actorId,stamp]);
       if (table === 'partners') await sql.query('INSERT INTO hamdee_private.partner_revisions(partner_id,version,profile,event_id) VALUES($1,$2,$3,$4)', [partnerId, row.version, JSON.stringify(evidence), eventId]);
       const result = { data: dto(row), status: 201, replay: false };
       if (b.action === 'update-partner') result.status = 200;
@@ -155,13 +197,15 @@ export class PartnerService {
       recordedThrough = String(cursor!.recordedThrough);
     }
     return this.properties.ownerContext(identity, async sql => {
+      await sql.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1,0))',['partner-statements']);
       await this.existing(sql, propertyId, partnerId);
       // ONE statement snapshot for rows, monthly reports and currency totals.
-      const result = (await sql.query<{ data: { partners: Row[]; partnerLabels:Record<string,string>; links: Row[]; entries: Row[]; history: Row[]; summary: Row[]; currencies: Row[]; recordedThrough: string } }>(`
+      const result = (await sql.query<{ data: { partners: Row[]; partnerLabels:Record<string,string>; links: Row[]; entries: Row[]; corrections:Row[]; history: Row[]; summary: Row[]; currencies: Row[]; recordedThrough: string } }>(`
         WITH cutoff AS (SELECT coalesce($5::timestamptz,clock_timestamp()) AS recorded_through),
-        eligible AS (SELECT e.* FROM hamdee_private.partner_entries e,cutoff c
+        retained AS (SELECT e.* FROM hamdee_private.partner_entries e,cutoff c
           WHERE ($1::uuid IS NULL OR e.property_id=$1) AND ($2::uuid IS NULL OR e.partner_id=$2)
             AND e.entry_date<=$4::date AND e.recorded_at<=c.recorded_through),
+        eligible AS (SELECT e.* FROM retained e,cutoff c WHERE NOT EXISTS(SELECT 1 FROM hamdee_private.partner_entry_corrections v WHERE v.original_entry_id=e.id AND v.corrected_at<=c.recorded_through)),
         groups AS (SELECT property_id,partner_id,currency,
           coalesce(sum(amount) FILTER (WHERE kind='contribution' AND entry_date<$3::date),0) AS opening_contributions,
           coalesce(sum(amount) FILTER (WHERE kind='withdrawal' AND entry_date<$3::date),0) AS opening_withdrawals,
@@ -179,7 +223,7 @@ export class PartnerService {
         history_page AS (SELECT h.* FROM hamdee_private.partner_events h,cutoff c
           WHERE ($1::uuid IS NULL OR h.property_id=$1) AND ($2::uuid IS NULL OR h.partner_id=$2)
           AND h.occurred_at<=c.recorded_through ORDER BY h.occurred_at DESC,h.id DESC LIMIT $8),
-        visible_partner_ids AS (SELECT partner_id FROM eligible
+        visible_partner_ids AS (SELECT partner_id FROM retained
           UNION SELECT partner_id FROM hamdee_private.property_partners WHERE ($1::uuid IS NULL OR property_id=$1) AND ($2::uuid IS NULL OR partner_id=$2)
           UNION SELECT partner_id FROM history_page)
         SELECT jsonb_build_object(
@@ -191,8 +235,10 @@ export class PartnerService {
               AND ($1::uuid IS NULL OR EXISTS(SELECT 1 FROM hamdee_private.property_partners l WHERE l.property_id=$1 AND l.partner_id=p.id)) ORDER BY p.id LIMIT $8) p),'[]'::jsonb),
           'links',coalesce((SELECT jsonb_agg(to_jsonb(l)-'event_id' ORDER BY l.id) FROM hamdee_private.property_partners l
             WHERE ($1::uuid IS NULL OR l.property_id=$1) AND ($2::uuid IS NULL OR l.partner_id=$2)),'[]'::jsonb),
-          'entries',coalesce((SELECT jsonb_agg(to_jsonb(e)-'event_id'-'amount'||jsonb_build_object('amount',e.amount::text) ORDER BY e.entry_date,e.id) FROM
-            (SELECT * FROM eligible WHERE ($6::uuid IS NULL OR (entry_date,id)>($9::date,$6::uuid)) ORDER BY entry_date,id LIMIT $8) e),'[]'::jsonb),
+          'entries',coalesce((SELECT jsonb_agg(to_jsonb(e)-'event_id'-'amount'||jsonb_build_object('amount',e.amount::text,'effective',NOT EXISTS(SELECT 1 FROM hamdee_private.partner_entry_corrections v,cutoff c WHERE v.original_entry_id=e.id AND v.corrected_at<=c.recorded_through)) ORDER BY e.entry_date,e.id) FROM
+            (SELECT * FROM retained WHERE ($6::uuid IS NULL OR (entry_date,id)>($9::date,$6::uuid)) ORDER BY entry_date,id LIMIT $8) e),'[]'::jsonb),
+          'corrections',coalesce((SELECT jsonb_agg(to_jsonb(v)-'event_id' ORDER BY v.corrected_at,v.id) FROM hamdee_private.partner_entry_corrections v,cutoff c
+            WHERE ($1::uuid IS NULL OR v.property_id=$1) AND ($2::uuid IS NULL OR v.partner_id=$2) AND v.corrected_at<=c.recorded_through),'[]'::jsonb),
           'history',coalesce((SELECT jsonb_agg(to_jsonb(h) ORDER BY h.occurred_at DESC,h.id DESC) FROM history_page h),'[]'::jsonb),
           'summary',coalesce((SELECT jsonb_agg(record ORDER BY property_id,partner_id,currency) FROM grouped_json),'[]'::jsonb),
           'currencies',coalesce((SELECT jsonb_agg(to_jsonb(t) ORDER BY t.currency) FROM
@@ -201,7 +247,7 @@ export class PartnerService {
               sum(contributions_to_date-withdrawals_to_date)::text AS "recordedNet" FROM groups GROUP BY currency) t),'[]'::jsonb)
         ) AS data`, [propertyId, partnerId, start, through, recordedThrough, entryCursor, partnerCursor, limit + 1, cursorDate])).rows[0].data;
       const { partners, entries, history } = result;
-      return { ...result, partners: partners.slice(0, limit).map(dto), entries: entries.slice(0, limit).map(dto), links: result.links.map(dto),
+      return { ...result, partners: partners.slice(0, limit).map(dto), entries: entries.slice(0, limit).map(dto), links: result.links.map(dto),corrections:result.corrections.map(dto),
         history: history.slice(0, limit).map(dto), historyHasMore: history.length > limit,
         nextPartnerCursor: partners.length > limit ? String(partners[limit - 1].id) : null,
         nextEntryCursor: entries.length > limit ? Buffer.from(JSON.stringify({ id: entries[limit - 1].id, date: entries[limit - 1].entry_date, recordedThrough: result.recordedThrough, scope })).toString('base64url') : null,

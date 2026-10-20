@@ -97,18 +97,24 @@ function configuredApplication():OwnerApplication|null {
   if(configured)return configured;
   // Activation requires a separately approved exact environment. No fallback,
   // generic SUPABASE_/DATABASE_URL or test identity.
-  if(process.env.HAMDEE_OWNER_RUNTIME_APPROVAL!=='approved-development-owner-runtime')return configurationUnavailable('runtime_approval');
   const e=process.env;
+  const production=e.HAMDEE_DATABASE_MODE==='hosted-production';
+  if(e.HAMDEE_OWNER_RUNTIME_APPROVAL!==(production?'approved-production-owner-runtime':'approved-development-owner-runtime'))return configurationUnavailable('runtime_approval');
   let stage:OwnerConfigurationStage='database_mode';
   try{
-    requireThat(!e.HAMDEE_DATABASE_MODE||['local','hosted-development'].includes(e.HAMDEE_DATABASE_MODE),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
-    const hosted=e.HAMDEE_DATABASE_MODE==='hosted-development';
+    requireThat(!e.HAMDEE_DATABASE_MODE||['local','hosted-development','hosted-production'].includes(e.HAMDEE_DATABASE_MODE),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
+    const hosted=e.HAMDEE_DATABASE_MODE==='hosted-development'||production;
     stage='hosted_scope';
-    requireThat(!hosted||(e.HAMDEE_HOSTED_DATABASE_APPROVAL==='approved-synthetic-development-database'&&reviewedHostedDatabasePins!==null&&
-      e.VERCEL_ENV==='preview'),503,'CONFIGURATION_UNAVAILABLE','Reviewed Preview database configuration is required.');
+    requireThat(!hosted||(reviewedHostedDatabasePins!==null&&(production?
+      e.HAMDEE_HOSTED_DATABASE_APPROVAL==='approved-existing-client-records-database'&&e.VERCEL_ENV==='production'&&
+        e.HAMDEE_OWNER_ORIGIN==='https://hamdee.vercel.app'&&e.HAMDEE_LEGACY_DATABASE_MARKER_APPROVAL==='reviewed-existing-hamdee-marker':
+      e.HAMDEE_HOSTED_DATABASE_APPROVAL==='approved-synthetic-development-database'&&e.VERCEL_ENV==='preview')),
+      503,'CONFIGURATION_UNAVAILABLE','Reviewed hosted database configuration is required.');
     stage='identity_configuration';
-    requireThat(e.HAMDEE_APP_ID==='hamdee'&&e.HAMDEE_ENVIRONMENT==='development'&&e.HAMDEE_DATA_CLASS==='synthetic_only'&&
-      e.HAMDEE_REGION==='ap-southeast-1'&&e.HAMDEE_RESIDENCY_DECISION==='approved_synthetic_development_only'&&
+    requireThat(e.HAMDEE_APP_ID==='hamdee'&&(production?
+      e.HAMDEE_ENVIRONMENT==='production'&&e.HAMDEE_DATA_CLASS==='client_records'&&e.HAMDEE_RESIDENCY_DECISION==='approved_client_data_singapore':
+      e.HAMDEE_ENVIRONMENT==='development'&&e.HAMDEE_DATA_CLASS==='synthetic_only'&&e.HAMDEE_RESIDENCY_DECISION==='approved_synthetic_development_only')&&
+      e.HAMDEE_REGION==='ap-southeast-1'&&
       !!e.HAMDEE_PROJECT_OWNER?.trim()&&e.HAMDEE_PROJECT_REF==='dytlzfwbgeuhzgzemqsf'&&
       e.HAMDEE_SUPABASE_URL===`https://${e.HAMDEE_PROJECT_REF}.supabase.co`&&e.HAMDEE_AUTH_ISSUER===e.HAMDEE_SUPABASE_URL+'/auth/v1'&&
       e.HAMDEE_AUTH_AUDIENCE==='authenticated'&&!!e.HAMDEE_OWNER_SUBJECT&&uuid.test(e.HAMDEE_OWNER_SUBJECT)&&
@@ -118,8 +124,14 @@ function configuredApplication():OwnerApplication|null {
     const number=(key:string)=>{const text=e[key];requireThat(!!text&&/^[1-9]\d*$/.test(text),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
       const n=Number(text);requireThat(Number.isSafeInteger(n)&&n>0,503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');return n;};
     stage='cookie_key';
-    requireThat(!!e.HAMDEE_OWNER_COOKIE_KEY&&/^[A-Za-z0-9_-]{43}$/.test(e.HAMDEE_OWNER_COOKIE_KEY),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
-    const cookieKey=Buffer.from(e.HAMDEE_OWNER_COOKIE_KEY,'base64url');requireThat(cookieKey.length===32&&cookieKey.toString('base64url')===e.HAMDEE_OWNER_COOKIE_KEY,503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
+    // Production requires its own server-only key, with no Preview fallback.
+    // The operator separately reviews key separation; never load Preview secrets
+    // into Production merely to compare them. If both are present, reject reuse.
+    const encodedCookieKey=production?e.HAMDEE_PRODUCTION_COOKIE_KEY:e.HAMDEE_OWNER_COOKIE_KEY;
+    requireThat(!production||(e.HAMDEE_PRODUCTION_COOKIE_KEY_APPROVAL==='approved-distinct-production-key'&&
+      !!encodedCookieKey&&encodedCookieKey!==e.HAMDEE_OWNER_COOKIE_KEY),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
+    requireThat(!!encodedCookieKey&&/^[A-Za-z0-9_-]{43}$/.test(encodedCookieKey),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
+    const cookieKey=Buffer.from(encodedCookieKey,'base64url');requireThat(cookieKey.length===32&&cookieKey.toString('base64url')===encodedCookieKey,503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
     stage='security_budgets';
     const window=number('HAMDEE_OWNER_RATE_WINDOW_MS'),bounds=number('HAMDEE_OWNER_RATE_BOUNDS'),backoff=number('HAMDEE_OWNER_RATE_BACKOFF_MS');
     const timeout=number('HAMDEE_OWNER_AUTH_TIMEOUT_MS');
@@ -140,6 +152,8 @@ function configuredApplication():OwnerApplication|null {
       csrfLifetimeMs},
       cookieKey,clock:()=>Date.now(),randomBytes,
       provider,database,
+      // Existing marker literals are reviewed legacy project identity pins,
+      // not a claim that this database contains only synthetic information.
       databaseEnvironment:hosted?'synthetic-development':'local-test',
       limiter:{async consume(flow,_key,now){let b=buckets.get(flow);if(!b||now>=b.reset){b={count:0,reset:now+window,blocked:0};buckets.set(flow,b);}
         if(now<b.blocked)return false;if(++b.count>bounds){b.blocked=now+backoff;return false;}return true;}},

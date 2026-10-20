@@ -343,7 +343,11 @@ export async function createOwnerQaFixture(config: { origin?: string; database?:
   const pg = config.database ? config.pg : config.pg || new PGlite();
   let member: { id: string; assignment: string } | undefined;
   if (!config.database) {
-    assert.ok(pg); await pg.exec(await up(config.migrationFiles)); member = await seedOwnerAppRecords(pg);
+    assert.ok(pg);const migrations=[...(config.migrationFiles??[])];
+    // Partner008 is retained verbatim; current partner routes require its
+    // explicitly enumerated additive009 correction migration in local tests.
+    if(migrations.includes('008_local_partner_records.up.sql')&&!migrations.includes('009_local_partner_corrections.up.sql'))migrations.push('009_local_partner_corrections.up.sql');
+    await pg.exec(await up(migrations)); member = await seedOwnerAppRecords(pg);
   }
   const database = config.database || adapter(pg!);
   const audit: OwnerAuthAuditEvent[] = [];
