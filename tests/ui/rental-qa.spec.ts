@@ -63,8 +63,8 @@ test('Rental UI QA: full owner room/tenant/agreement/due/partial collection work
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await login(page); await prepareRoomAgreement(page);
   const occupancy = page.getByRole('region', { name: 'Rooms and occupancy', exact: true });
-  await expect(occupancy.getByRole('cell', { name: 'occupied', exact: true })).toHaveCount(1);
-  await expect(occupancy.getByRole('cell', { name: 'vacant', exact: true })).toHaveCount(1);
+  await expect(occupancy.getByRole('cell', { name: 'Occupied', exact: true })).toHaveCount(1);
+  await expect(occupancy.getByRole('cell', { name: 'Occupancy not verified', exact: true })).toHaveCount(1);
   await collect(page, 'Rent', 'Cash', '400.00');
   const dues = page.getByRole('region', { name: 'Monthly rent dues', exact: true });
   await expect(dues.getByRole('cell', { name: 'partial', exact: true })).toBeVisible();

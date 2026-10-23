@@ -3,6 +3,7 @@ import type { Identity } from './auth';
 import { PropertyService } from './service';
 import { requireThat } from './errors';
 import { uuid } from './validation';
+import { historicalOccupantsByRoom } from './historical-occupancy';
 
 type Row=Record<string,unknown>;
 export const day=(v:unknown)=>v instanceof Date?v.toISOString().slice(0,10):String(v).slice(0,10);
@@ -22,6 +23,15 @@ export class RentalService {
     return this.properties.ownerContext(identity,async sql=>{
       const select=async(table:string,field='property_id')=>(await sql.query<Row>(`SELECT * FROM hamdee_private.${table} ${field?'WHERE ($1::uuid IS NULL OR '+field+'=$1)':''} ORDER BY id`,field?[propertyId]:[])).rows;
       const rooms=await select('rooms'),agreements=await select('rental_agreements'),tenants=await select('tenants','');
+      // Use immutable creation profiles/command results so routine display-name,
+      // room-code and contact-note edits cannot rewrite imported source history.
+      const properties=(await sql.query<Row>(`SELECT property_id AS id,profile->>'name' AS name FROM hamdee_private.property_revisions WHERE version=1 AND ($1::uuid IS NULL OR property_id=$1)`,[propertyId])).rows;
+      const original=(await sql.query<{profile:Row}>(`SELECT result->'data' AS profile FROM hamdee_private.rental_commands
+        WHERE result->'data'->>'version'='1' AND result->'data'->>'id'=ANY($1::text[])`,[[...rooms,...tenants].map(row=>String(row.id))])).rows.map(row=>row.profile);
+      const roomIds=new Set(rooms.map(row=>String(row.id))),tenantIds=new Set(tenants.map(row=>String(row.id)));
+      const originalRooms=original.filter(row=>roomIds.has(String(row.id))&&typeof row.code==='string').map(row=>({...row,property_id:row.propertyId}));
+      const originalTenants=original.filter(row=>tenantIds.has(String(row.id))&&typeof row.notes==='string');
+      const historical=historicalOccupantsByRoom(properties,originalRooms,originalTenants);
       const collections=await select('rent_collections'),history=await select('rental_events');
       const dues=(await sql.query<Row>(`SELECT d.*,coalesce(sum(a.amount_minor),0)::text AS paid_minor,
         (d.amount_minor-coalesce(sum(a.amount_minor),0))::text AS outstanding_minor FROM hamdee_private.rent_dues d
@@ -38,9 +48,10 @@ export class RentalService {
         if(c.kind==='advance'){g.advanceMinor+=amount-allocations.filter(a=>a.collection_id===c.id&&day(a.allocated_date)<=asOf).reduce((s,a)=>s+BigInt(String(a.amount_minor)),0n);}
         if(c.kind==='deposit')g.depositMinor+=amount;if(c.kind==='deposit_refund')g.depositMinor-=amount;
       }
-      const roomViews=rooms.map(room=>({...view(room),occupancy:agreements.some(a=>a.room_id===room.id&&day(a.start_date)<=asOf&&(!a.end_date||day(a.end_date)>=asOf))?'occupied':'vacant'}));
+      const roomViews=rooms.map(room=>({...view(room),occupancy:agreements.some(a=>a.room_id===room.id&&day(a.start_date)<=asOf&&(!a.end_date||day(a.end_date)>=asOf))?'occupied':'unknown',
+        historicalOccupants:historical.get(String(room.id))?.historicalOccupants??[],historicalOccupancyReviewRequired:historical.get(String(room.id))?.historicalOccupancyReviewRequired??false}));
       return {rooms:roomViews,tenants:tenants.map(view),agreements:agreements.map(view),dues:dues.map(d=>({...view(d),status:BigInt(String(d.outstanding_minor))===0n?'paid':BigInt(String(d.paid_minor))>0n?'partial':'pending'})),collections:collections.map(view),allocations:allocations.map(view),history:history.map(view),
-        summary:{totalRooms:rooms.length,occupiedRooms:roomViews.filter(r=>r.occupancy==='occupied').length,vacantRooms:roomViews.filter(r=>r.occupancy==='vacant').length,currencies:[...summaries].map(([currency,values])=>({currency,...Object.fromEntries(Object.entries(values).map(([k,v])=>[k,String(v)]))}))}};
+        summary:{totalRooms:rooms.length,occupiedRooms:roomViews.filter(r=>r.occupancy==='occupied').length,vacantRooms:0,unverifiedRooms:roomViews.filter(r=>r.occupancy==='unknown').length,currencies:[...summaries].map(([currency,values])=>({currency,...Object.fromEntries(Object.entries(values).map(([k,v])=>[k,String(v)]))}))}};
     });
   }
   async mutate(identity:Identity,input:unknown,key:string,requestId:string) {

@@ -27,3 +27,7 @@ dialog[open],dialog.drawer[open]{animation:none!important}.button{transition:non
 .workflow-nav{display:flex;gap:8px;flex-wrap:wrap;padding:16px 20px;border-bottom:1px solid var(--rule);font-size:12px}.workflow-nav a{display:inline-flex;align-items:center;min-height:44px;padding:8px 12px;border-radius:var(--radius);color:var(--charcoal)}.workflow-nav a:hover,.workflow-nav a[aria-current=page]{background:var(--amber-wash);color:var(--brass-ink)}[data-rental-section][hidden]{display:none}
 .nav-unavailable,.nav-unavailable:disabled,.nav-unavailable:hover{width:100%;border:0;background:transparent;text-align:left;opacity:1;cursor:default;color:var(--charcoal)}.nav-unavailable small{margin-left:auto;font-size:10px;color:var(--brass-ink)}
 .rental-form-grid .field[hidden]{display:none}
+.rental-occupancy-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}.rental-occupancy-metrics .metric-value{font-variant-numeric:tabular-nums}
+.isolated-demo-notice{display:flex;flex-wrap:wrap;gap:4px 16px;padding:12px 28px;background:var(--amber-wash);color:var(--brass-ink);border-bottom:1px solid var(--rule);font-size:12px;line-height:1.6}.isolated-demo-notice[hidden]{display:none}.isolated-demo-notice span{color:var(--charcoal)}
+@media(max-width:850px){.rental-occupancy-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:640px){.rental-occupancy-metrics{grid-template-columns:1fr}.isolated-demo-notice{padding:12px 16px}}

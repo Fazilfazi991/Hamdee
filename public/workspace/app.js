@@ -1,7 +1,9 @@
 import { PropertyApi } from './adapter.js';
-import { renderRental,renderRentalDashboard,resetRental,rentalReportPeriod } from './rental.js';
+import { renderRental,renderRentalDashboard,resetRental,rentalReportPeriod,isIsolatedDemoContext } from './rental.js';
 import { renderExpenses,resetExpenses,expenseReportPeriod } from './expenses.js';
 const api=new PropertyApi(),$=s=>document.querySelector(s),icon=window.icon;
+const isolatedDemo=isIsolatedDemoContext(window.location.hostname,$('meta[name="hamdee-demo"]')?.content);
+if(isolatedDemo){$('#isolated-demo-notice').hidden=false;document.querySelector('.sidebar-bottom .demo-indicator').textContent='DEMO · Isolated local records';document.querySelector('.sidebar-bottom p').textContent='Synthetic examples only. No real client data.';document.querySelector('.workspace-footer span:last-child').textContent='DEMO · Never verified business balances';}
 const e=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let session=null,current=null,formContext=null,pending=null,trigger=null,routeSequence=0,authGeneration=0;
 let filters={archiveState:'active',q:'',limit:'50',cursor:''},page=null;
@@ -173,7 +175,7 @@ async function boot(){
     try{const state=await api.authState(controller.signal);if(!validRead(seq,controller))return;managed=true;rememberAccess(state.data);if(access.state!=='authenticated'){renderAccess();return;}}
     catch(error){if(error.status!==404)throw error;managed=false;}
     if(!validRead(seq,controller))return;session=result.data;$('#user-context').innerHTML=`<strong>${e(managed?'HAMDEE owner':session.name)}</strong><small>${managed?'Owner account':e(session.roles.join(' · '))}</small>`;
-    $('#mode-detail').textContent=session.authenticationProvider==='automated-test'?'Automated test identity · Synthetic records only':'Owner access · Saved records';
+    $('#mode-detail').textContent=isolatedDemo?'DEMO owner · Isolated synthetic records':session.authenticationProvider==='automated-test'?'Automated test identity · Synthetic records only':'Owner access · Saved records';
     const initialRender=render();if(session&&managed)void discoverOperations();await initialRender;
   }catch(error){if(!validRead(seq,controller))return;if(accessLost(error))await showAccessLoss(error);else{clearProtected();showUnavailable('Backend unavailable',error.message);}}
   finally{if(validRead(seq,controller))$('#main').setAttribute('aria-busy','false');}

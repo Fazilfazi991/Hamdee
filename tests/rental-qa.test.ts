@@ -46,7 +46,7 @@ test('Rental QA: property-scoped normalized room uniqueness, occupancy and room 
   await denied(await write(f, 'create-room', { propertyId: a.p.id, code: ' qa-01 ' }));
   await create(f, 'create-room', { propertyId: b.id, code: 'qa-01' });
   await create(f, 'create-room', { propertyId: a.p.id, code: 'QA-02' });
-  const state = await read(f); assert.equal(state.summary.totalRooms, 3); assert.equal(state.summary.occupiedRooms, 1); assert.equal(state.summary.vacantRooms, 2);
+  const state = await read(f); assert.equal(state.summary.totalRooms, 3); assert.equal(state.summary.occupiedRooms, 1); assert.equal(state.summary.vacantRooms, 0); assert.equal(state.summary.unverifiedRooms, 2);
   assert.equal(state.rooms.find((r: Row) => r.id === a.room.id).occupancy, 'occupied');
   await create(f, 'update-room', { roomId: a.room.id, expectedVersion: 1, code: 'QA-01', label: 'Synthetic changed label' });
   await denied(await write(f, 'update-room', { roomId: a.room.id, expectedVersion: 1, code: 'QA-03' }));
