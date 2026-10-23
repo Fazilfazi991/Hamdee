@@ -71,6 +71,9 @@ test('Performance: late managed identity rejection still rolls back command, aud
 });
 
 test('Performance: batched hosted settings retain exact limits and transaction-local isolation on commit and rollback',async t=>{
+  const previous=new Map(['VERCEL_ENV','VERCEL_GIT_COMMIT_REF','HAMDEE_OWNER_ORIGIN'].map(key=>[key,process.env[key]]));
+  t.after(()=>{for(const [key,value]of previous)if(value===undefined)delete process.env[key];else process.env[key]=value;});
+  Object.assign(process.env,{VERCEL_ENV:'preview',VERCEL_GIT_COMMIT_REF:'codex/hamdee-demo-preview',HAMDEE_OWNER_ORIGIN:'https://hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app'});
   const pg=new PGlite();t.after(()=>pg.close());
   await pg.exec(`CREATE ROLE hamdee_runtime NOLOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION;
     CREATE ROLE hamdee_backend LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION;

@@ -4,7 +4,8 @@
   "git": {
     "deploymentEnabled": {
       "codex/hamdee-crm-development": false,
-      "codex/hamdee-production-hold": false
+      "codex/hamdee-production-hold": false,
+      "codex/hamdee-demo-preview": false
     }
   }
 }

@@ -312,16 +312,16 @@ test('Owner runtime diagnostic: fixed server categories omit secret canaries and
     const base={
       HAMDEE_OWNER_RUNTIME_APPROVAL:'approved-development-owner-runtime',HAMDEE_APP_ID:'hamdee',
       HAMDEE_ENVIRONMENT:'development',HAMDEE_DATA_CLASS:'synthetic_only',HAMDEE_PROJECT_OWNER:'PRIVATE_OWNER_CANARY',
-      HAMDEE_PROJECT_REF:'dytlzfwbgeuhzgzemqsf',HAMDEE_REGION:'ap-southeast-1',
+      HAMDEE_PROJECT_REF:'jfynuafwsympxxpkqags',HAMDEE_REGION:'ap-southeast-1',
       HAMDEE_RESIDENCY_DECISION:'approved_synthetic_development_only',
-      HAMDEE_SUPABASE_URL:'https://dytlzfwbgeuhzgzemqsf.supabase.co',
-      HAMDEE_AUTH_ISSUER:'https://dytlzfwbgeuhzgzemqsf.supabase.co/auth/v1',HAMDEE_AUTH_AUDIENCE:'authenticated',
+      HAMDEE_SUPABASE_URL:'https://jfynuafwsympxxpkqags.supabase.co',
+      HAMDEE_AUTH_ISSUER:'https://jfynuafwsympxxpkqags.supabase.co/auth/v1',HAMDEE_AUTH_AUDIENCE:'authenticated',
       HAMDEE_SUPABASE_PUBLISHABLE_KEY:'sb_publishable_PRIVATE_KEY_CANARY',
       HAMDEE_OWNER_SUBJECT:'44440000-1111-4111-8111-111111111111',HAMDEE_OWNER_EMAIL:'private-email-canary@example.invalid',
-      HAMDEE_OWNER_ORIGIN:'https://synthetic.invalid',HAMDEE_OWNER_COOKIE_KEY:Buffer.alloc(32,12).toString('base64url'),
-      HAMDEE_DATABASE_MODE:'hosted-development',HAMDEE_HOSTED_DATABASE_APPROVAL:'approved-synthetic-development-database',
-      HAMDEE_DATABASE_URL:'postgres://hamdee_backend.dytlzfwbgeuhzgzemqsf:PRIVATE_DATABASE_CANARY@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres',
-      VERCEL_ENV:'preview',HAMDEE_OWNER_IDLE_MS:'900000',HAMDEE_OWNER_ABSOLUTE_MS:'28800000',
+      HAMDEE_OWNER_ORIGIN:'https://hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app',HAMDEE_OWNER_COOKIE_KEY:Buffer.alloc(32,12).toString('base64url'),
+      HAMDEE_DATABASE_MODE:'hosted-development',HAMDEE_HOSTED_DATABASE_APPROVAL:'approved-isolated-demo-database',
+      HAMDEE_DATABASE_URL:'postgres://hamdee_backend.jfynuafwsympxxpkqags:PRIVATE_DATABASE_CANARY@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres',
+      VERCEL_ENV:'preview',VERCEL_GIT_COMMIT_REF:'codex/hamdee-demo-preview',HAMDEE_OWNER_IDLE_MS:'900000',HAMDEE_OWNER_ABSOLUTE_MS:'28800000',
       HAMDEE_OWNER_CSRF_MS:'60000',HAMDEE_OWNER_AUTH_TIMEOUT_MS:'3000',HAMDEE_OWNER_RATE_WINDOW_MS:'60000',
       HAMDEE_OWNER_RATE_BOUNDS:'30',HAMDEE_OWNER_RATE_BACKOFF_MS:'60000'
     };
@@ -329,7 +329,7 @@ test('Owner runtime diagnostic: fixed server categories omit secret canaries and
     Object.assign(process.env,base,patch);
     if(loggerFails)console.warn=()=>{throw new Error('PRIVATE_LOGGER_ERROR_CANARY');};
     for(const path of ['/api/hamdee/auth/state','/api/hamdee/auth/state','/api/hamdee/v1/properties']){
-      const request=new Request('https://synthetic.invalid'+path);
+      const request=new Request('https://hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app'+path);
       const response=await(path.includes('/auth/')?handleOwnerAuthRequest(request):handleOwnerPropertyRequest(request));
       assert.equal(response.status,503);assert.equal(response.headers.get('cache-control'),'private, no-store');
       assert.equal(response.headers.get('x-content-type-options'),'nosniff');
@@ -358,7 +358,7 @@ test('Owner runtime diagnostic: fixed server categories omit secret canaries and
     ['session_policy',{HAMDEE_OWNER_IDLE_MS:'900001'}],
     ['provider_configuration',{HAMDEE_SUPABASE_PUBLISHABLE_KEY:'PRIVATE_KEY_CANARY'}],
     ['database_configuration',{HAMDEE_DATABASE_CA_PEM:'PRIVATE_CA_CANARY'}],
-    ['application_configuration',{HAMDEE_OWNER_ORIGIN:'https://synthetic.invalid/'}],
+    ['hosted_scope',{HAMDEE_OWNER_ORIGIN:'https://hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app/'}],
     ['identity_configuration',{HAMDEE_OWNER_EMAIL:'PRIVATE_MAILBOX_CANARY'},true]
   ];
   for(const scenario of scenarios){

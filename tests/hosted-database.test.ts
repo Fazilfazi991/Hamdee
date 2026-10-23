@@ -8,7 +8,8 @@ import { runTransaction } from '../src/database';
 import { handleOwnerAuthRequest,handleOwnerPropertyRequest } from '../src/owner-runtime';
 
 // Synthetic configuration only. No connection or DNS request is made.
-const pins:HostedDatabasePins={projectRef:HAMDEE_DEVELOPMENT_PROJECT,host:'synthetic-singapore.pooler.supabase.com',port:6543,
+Object.assign(process.env,{VERCEL_ENV:'preview',VERCEL_GIT_COMMIT_REF:'codex/hamdee-demo-preview',HAMDEE_OWNER_ORIGIN:'https://hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app'});
+const pins:HostedDatabasePins={projectRef:HAMDEE_DEVELOPMENT_PROJECT,host:'aws-0-ap-southeast-1.pooler.supabase.com',port:6543,
   database:'postgres',user:`hamdee_backend.${HAMDEE_DEVELOPMENT_PROJECT}`,mode:'transaction'};
 const url=`postgresql://${pins.user}:SYNTHETIC_PASSWORD@${pins.host}:${pins.port}/${pins.database}`;
 test('Hosted preparation: verified TLS, bounded pool and exact pins with no URL-parser overrides',()=>{
@@ -17,7 +18,7 @@ test('Hosted preparation: verified TLS, bounded pool and exact pins with no URL-
   assert.equal(ssl.checkServerIdentity,checkServerIdentity);assert.equal(config.max,2);assert.equal(config.connectionTimeoutMillis,3000);
   assert.equal(config.connectionString,undefined);assert.equal(config.user,pins.user);assert.equal(config.database,'postgres');
   const client=new Client(config);assert.equal(client.host,pins.host);assert.equal(client.port,6543);
-  assert.throws(()=>hostedConnectionOptions(url,null));assert.deepEqual(reviewedHostedDatabasePins,{"projectRef":"dytlzfwbgeuhzgzemqsf","host":"aws-0-ap-southeast-1.pooler.supabase.com","port":6543,"database":"postgres","user":"hamdee_backend.dytlzfwbgeuhzgzemqsf","mode":"transaction"});
+  assert.throws(()=>hostedConnectionOptions(url,null));assert.deepEqual(reviewedHostedDatabasePins,{"projectRef":"jfynuafwsympxxpkqags","host":"aws-0-ap-southeast-1.pooler.supabase.com","port":6543,"database":"postgres","user":"hamdee_backend.jfynuafwsympxxpkqags","mode":"transaction"});
 });
 test('Hosted preparation: wrong project/host/port/database/user, privileged login and connection parameters fail closed',()=>{
   for(const changed of [url+'?sslmode=no-verify',url+'?options=-c%20role=postgres',url+'#override',
@@ -74,11 +75,11 @@ test('Hosted transaction: callback failure and uncertain COMMIT discard the conn
 });
 test('Hosted runtime: environment inputs cannot activate pending source pins or expose protected data',async()=>{
   const keys={HAMDEE_OWNER_RUNTIME_APPROVAL:'approved-development-owner-runtime',HAMDEE_DATABASE_MODE:'hosted-development',
-    HAMDEE_HOSTED_DATABASE_APPROVAL:'approved-synthetic-development-database',VERCEL_ENV:'preview'};
+    HAMDEE_HOSTED_DATABASE_APPROVAL:'approved-isolated-demo-database',VERCEL_ENV:'preview'};
   const previous=new Map(Object.keys(keys).map(key=>[key,process.env[key]]));Object.assign(process.env,keys);
   try{
     for(const [method,path] of [['GET','/api/hamdee/auth/state'],['GET','/api/hamdee/v1/properties'],['POST','/api/hamdee/v1/properties']]){
-      const request=new Request('https://synthetic.invalid'+path,{method});
+      const request=new Request('https://hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app'+path,{method});
       const response=path.includes('/auth/')?await handleOwnerAuthRequest(request):await handleOwnerPropertyRequest(request);
       assert.equal(response.status,503);assert.equal((await response.json()).error.code,'CONFIGURATION_UNAVAILABLE');
     }
@@ -99,7 +100,8 @@ test('Hosted diagnostic: bounded fixed categories exclude secret canaries and re
     console.warn=(...args)=>{if(loggerFails)throw new Error('PRIVATE_LOGGER_CANARY');warnings.push(args);};
     const {hostedConnectionOptions,HostedPostgresDatabase}=await import('./src/hosted-database.ts');
     const {handleOwnerAuthRequest,handleOwnerPropertyRequest}=await import('./src/owner-runtime.ts');
-    const project='dytlzfwbgeuhzgzemqsf';
+    Object.assign(process.env,{VERCEL_ENV:'preview',VERCEL_GIT_COMMIT_REF:'codex/hamdee-demo-preview',HAMDEE_OWNER_ORIGIN:'https://hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app'});
+    const project='jfynuafwsympxxpkqags';
     const pins={projectRef:project,host:'aws-0-ap-southeast-1.pooler.supabase.com',port:6543,database:'postgres',
       user:'hamdee_backend.'+project,mode:'transaction'};
     const url='postgres://'+pins.user+':PRIVATE_PASSWORD_CANARY@'+pins.host+':6543/postgres';
@@ -124,15 +126,15 @@ test('Hosted diagnostic: bounded fixed categories exclude secret canaries and re
       HAMDEE_SUPABASE_URL:'https://'+project+'.supabase.co',HAMDEE_AUTH_ISSUER:'https://'+project+'.supabase.co/auth/v1',
       HAMDEE_AUTH_AUDIENCE:'authenticated',HAMDEE_SUPABASE_PUBLISHABLE_KEY:'sb_publishable_PRIVATE_KEY_CANARY',
       HAMDEE_OWNER_SUBJECT:'44440000-1111-4111-8111-111111111111',HAMDEE_OWNER_EMAIL:'private-email-canary@example.invalid',
-      HAMDEE_OWNER_ORIGIN:'https://synthetic.invalid',HAMDEE_OWNER_COOKIE_KEY:Buffer.alloc(32,12).toString('base64url'),
-      HAMDEE_DATABASE_MODE:'hosted-development',HAMDEE_HOSTED_DATABASE_APPROVAL:'approved-synthetic-development-database',
+      HAMDEE_OWNER_ORIGIN:'https://hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app',HAMDEE_OWNER_COOKIE_KEY:Buffer.alloc(32,12).toString('base64url'),
+      HAMDEE_DATABASE_MODE:'hosted-development',HAMDEE_HOSTED_DATABASE_APPROVAL:'approved-isolated-demo-database',
       HAMDEE_DATABASE_URL:url+'?PRIVATE_URL_CANARY=1',VERCEL_ENV:'preview',
       HAMDEE_OWNER_IDLE_MS:'900000',HAMDEE_OWNER_ABSOLUTE_MS:'28800000',HAMDEE_OWNER_CSRF_MS:'60000',
       HAMDEE_OWNER_AUTH_TIMEOUT_MS:'3000',HAMDEE_OWNER_RATE_WINDOW_MS:'60000',HAMDEE_OWNER_RATE_BOUNDS:'30',
       HAMDEE_OWNER_RATE_BACKOFF_MS:'60000'
     });
     for(const path of ['/api/hamdee/auth/state','/api/hamdee/v1/properties']){
-      const request=new Request('https://synthetic.invalid'+path);
+      const request=new Request('https://hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app'+path);
       const response=await(path.includes('/auth/')?handleOwnerAuthRequest(request):handleOwnerPropertyRequest(request));
       assert.equal(response.status,503);assert.equal(response.headers.get('cache-control'),'private, no-store');
       assert.equal(response.headers.get('x-content-type-options'),'nosniff');

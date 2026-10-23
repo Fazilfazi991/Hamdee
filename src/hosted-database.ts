@@ -5,7 +5,15 @@ import { type Database, type Sql, runTransaction } from './database';
 import { ApiError, requireThat } from './errors';
 import { logSafely, securityLogger, type SecurityLogger } from './security-log';
 
-export const HAMDEE_DEVELOPMENT_PROJECT='dytlzfwbgeuhzgzemqsf';
+// This branch is deliberately unable to open the client-records database.
+export const HAMDEE_DEVELOPMENT_PROJECT='jfynuafwsympxxpkqags';
+export const HAMDEE_PRODUCTION_PROJECT='dytlzfwbgeuhzgzemqsf';
+export const HAMDEE_DEMO_BRANCH='codex/hamdee-demo-preview';
+export const HAMDEE_DEMO_ORIGIN='https://hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app';
+export function isApprovedDemoRuntime(environment:Readonly<Record<string,string|undefined>>=process.env):boolean {
+  return environment.VERCEL_ENV==='preview'&&environment.VERCEL_GIT_COMMIT_REF===HAMDEE_DEMO_BRANCH&&
+    environment.HAMDEE_OWNER_ORIGIN===HAMDEE_DEMO_ORIGIN;
+}
 export interface HostedDatabasePins {
   readonly projectRef:typeof HAMDEE_DEVELOPMENT_PROJECT;
   readonly host:string;
@@ -16,7 +24,7 @@ export interface HostedDatabasePins {
 }
 // Pins reviewed from the dedicated project Connect panel; activation remains separately gated.
 // A URL, region-derived hostname or environment variable cannot approve itself.
-export const reviewedHostedDatabasePins:HostedDatabasePins|null=Object.freeze({"projectRef":"dytlzfwbgeuhzgzemqsf","host":"aws-0-ap-southeast-1.pooler.supabase.com","port":6543,"database":"postgres","user":"hamdee_backend.dytlzfwbgeuhzgzemqsf","mode":"transaction"});
+export const reviewedHostedDatabasePins:HostedDatabasePins|null=Object.freeze({"projectRef":"jfynuafwsympxxpkqags","host":"aws-0-ap-southeast-1.pooler.supabase.com","port":6543,"database":"postgres","user":"hamdee_backend.jfynuafwsympxxpkqags","mode":"transaction"});
 const denied=():never=>{throw new ApiError(503,'ENVIRONMENT_MISMATCH','The dedicated HAMDEE development database is unavailable.');};
 type HostedConfigurationStage='process_environment'|'pins'|'url'|'password_encoding'|'tls_ca'|'driver_constructor';
 const reportedConfigurationFailures=new Set<HostedConfigurationStage>();
@@ -31,10 +39,13 @@ function reportConfigurationFailure(stage:HostedConfigurationStage):void {
 export function hostedConnectionOptions(connectionUrl:string,pins:HostedDatabasePins|null,ca?:string):PoolConfig {
   let stage:HostedConfigurationStage='process_environment';
   try{
-    requireThat(!Object.entries(process.env).some(([key,value])=>/^PG/i.test(key)&&!!value)&&process.env.NODE_TLS_REJECT_UNAUTHORIZED!=='0',
+    requireThat(isApprovedDemoRuntime()&&!Object.entries(process.env).some(([key,value])=>/^PG/i.test(key)&&!!value)&&process.env.NODE_TLS_REJECT_UNAUTHORIZED!=='0',
       503,'ENVIRONMENT_MISMATCH','Dedicated database review is required.');
     stage='pins';
-    requireThat(pins?.projectRef===HAMDEE_DEVELOPMENT_PROJECT,503,'ENVIRONMENT_MISMATCH','Dedicated database review is required.');
+    requireThat(pins?.projectRef===HAMDEE_DEVELOPMENT_PROJECT&&pins.projectRef!==String(HAMDEE_PRODUCTION_PROJECT)&&
+      reviewedHostedDatabasePins!==null&&pins.host===reviewedHostedDatabasePins.host&&pins.port===reviewedHostedDatabasePins.port&&
+      pins.user===reviewedHostedDatabasePins.user&&pins.mode===reviewedHostedDatabasePins.mode,
+      503,'ENVIRONMENT_MISMATCH','Dedicated database review is required.');
     const direct=pins.mode==='direct';
     requireThat(pins.database==='postgres'&&(direct
       ?pins.host===`db.${HAMDEE_DEVELOPMENT_PROJECT}.supabase.co`&&pins.port===5432&&pins.user==='hamdee_backend'
@@ -56,13 +67,14 @@ export function hostedConnectionOptions(connectionUrl:string,pins:HostedDatabase
     return {host:pins.host,port:pins.port,database:pins.database,user:pins.user,password,
       ssl:{rejectUnauthorized:true,minVersion:'TLSv1.2',servername:pins.host,checkServerIdentity,...(ca?{ca}:{})},
       max:2,connectionTimeoutMillis:3000,idleTimeoutMillis:10000,allowExitOnIdle:true,
-      application_name:'hamdee-synthetic-development'};
+      application_name:'hamdee-isolated-demo'};
   }catch{reportConfigurationFailure(stage);return denied() as never;}
 }
 
 /** All session state is transaction-local, including on transaction poolers.
  * Existing queries use unnamed statements and no query pipelining. */
 export async function guardHostedTransaction<T>(sql:Sql,work:(sql:Sql)=>Promise<T>):Promise<T> {
+  requireThat(isApprovedDemoRuntime(),503,'ENVIRONMENT_MISMATCH','The dedicated HAMDEE development database is unavailable.');
   // All four independent settings remain transaction-local. One server round
   // trip applies the same fixed limits before any role/identity/data query.
   await sql.query(`SELECT pg_catalog.set_config('statement_timeout','10000ms',true),

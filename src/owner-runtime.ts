@@ -1,5 +1,5 @@
-import { LocalPostgresDatabase,type Database } from './database';
-import { HostedPostgresDatabase,reviewedHostedDatabasePins } from './hosted-database';
+import { type Database } from './database';
+import { HostedPostgresDatabase,reviewedHostedDatabasePins,HAMDEE_DEVELOPMENT_PROJECT,HAMDEE_DEMO_ORIGIN,isApprovedDemoRuntime } from './hosted-database';
 import { createOwnerAuth,createManagedOwnerProvider,type OwnerAuthOptions,type OwnerAuthorization,type OwnerAuthFlow } from './owner-auth';
 import type { SecurityLogger } from './security-log';
 import { createHandler,unavailable,type OperationsApiServices } from './http';
@@ -94,42 +94,35 @@ function configurationUnavailable(stage:OwnerConfigurationStage):null {
   return null;
 }
 function configuredApplication():OwnerApplication|null {
-  if(configured)return configured;
   // Activation requires a separately approved exact environment. No fallback,
   // generic SUPABASE_/DATABASE_URL or test identity.
   const e=process.env;
-  const production=e.HAMDEE_DATABASE_MODE==='hosted-production';
-  if(e.HAMDEE_OWNER_RUNTIME_APPROVAL!==(production?'approved-production-owner-runtime':'approved-development-owner-runtime'))return configurationUnavailable('runtime_approval');
+  if(e.HAMDEE_OWNER_RUNTIME_APPROVAL!=='approved-development-owner-runtime')return configurationUnavailable('runtime_approval');
+  if(!isApprovedDemoRuntime())return configurationUnavailable('hosted_scope');
+  if(configured)return configured;
   let stage:OwnerConfigurationStage='database_mode';
   try{
-    requireThat(!e.HAMDEE_DATABASE_MODE||['local','hosted-development','hosted-production'].includes(e.HAMDEE_DATABASE_MODE),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
-    const hosted=e.HAMDEE_DATABASE_MODE==='hosted-development'||production;
+    requireThat(e.HAMDEE_DATABASE_MODE==='hosted-development',503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
     stage='hosted_scope';
-    requireThat(!hosted||(reviewedHostedDatabasePins!==null&&(production?
-      e.HAMDEE_HOSTED_DATABASE_APPROVAL==='approved-existing-client-records-database'&&e.VERCEL_ENV==='production'&&
-        e.HAMDEE_OWNER_ORIGIN==='https://hamdee.vercel.app'&&e.HAMDEE_LEGACY_DATABASE_MARKER_APPROVAL==='reviewed-existing-hamdee-marker':
-      e.HAMDEE_HOSTED_DATABASE_APPROVAL==='approved-synthetic-development-database'&&e.VERCEL_ENV==='preview')),
+    requireThat(reviewedHostedDatabasePins!==null&&e.HAMDEE_HOSTED_DATABASE_APPROVAL==='approved-isolated-demo-database',
       503,'CONFIGURATION_UNAVAILABLE','Reviewed hosted database configuration is required.');
     stage='identity_configuration';
-    requireThat(e.HAMDEE_APP_ID==='hamdee'&&(production?
-      e.HAMDEE_ENVIRONMENT==='production'&&e.HAMDEE_DATA_CLASS==='client_records'&&e.HAMDEE_RESIDENCY_DECISION==='approved_client_data_singapore':
-      e.HAMDEE_ENVIRONMENT==='development'&&e.HAMDEE_DATA_CLASS==='synthetic_only'&&e.HAMDEE_RESIDENCY_DECISION==='approved_synthetic_development_only')&&
+    requireThat(e.HAMDEE_APP_ID==='hamdee'&&
+      e.HAMDEE_ENVIRONMENT==='development'&&e.HAMDEE_DATA_CLASS==='synthetic_only'&&e.HAMDEE_RESIDENCY_DECISION==='approved_synthetic_development_only'&&
       e.HAMDEE_REGION==='ap-southeast-1'&&
-      !!e.HAMDEE_PROJECT_OWNER?.trim()&&e.HAMDEE_PROJECT_REF==='dytlzfwbgeuhzgzemqsf'&&
+      !!e.HAMDEE_PROJECT_OWNER?.trim()&&e.HAMDEE_PROJECT_REF===HAMDEE_DEVELOPMENT_PROJECT&&
       e.HAMDEE_SUPABASE_URL===`https://${e.HAMDEE_PROJECT_REF}.supabase.co`&&e.HAMDEE_AUTH_ISSUER===e.HAMDEE_SUPABASE_URL+'/auth/v1'&&
       e.HAMDEE_AUTH_AUDIENCE==='authenticated'&&!!e.HAMDEE_OWNER_SUBJECT&&uuid.test(e.HAMDEE_OWNER_SUBJECT)&&
       !!e.HAMDEE_OWNER_EMAIL&&e.HAMDEE_OWNER_EMAIL===e.HAMDEE_OWNER_EMAIL.trim().toLowerCase()&&
       /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.HAMDEE_OWNER_EMAIL)&&
-      !!e.HAMDEE_DATABASE_URL&&!!e.HAMDEE_OWNER_ORIGIN?.startsWith('https://'),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
+      !!e.HAMDEE_DATABASE_URL&&e.HAMDEE_OWNER_ORIGIN===HAMDEE_DEMO_ORIGIN,503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
     const number=(key:string)=>{const text=e[key];requireThat(!!text&&/^[1-9]\d*$/.test(text),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
       const n=Number(text);requireThat(Number.isSafeInteger(n)&&n>0,503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');return n;};
     stage='cookie_key';
-    // Production requires its own server-only key, with no Preview fallback.
-    // The operator separately reviews key separation; never load Preview secrets
-    // into Production merely to compare them. If both are present, reject reuse.
-    const encodedCookieKey=production?e.HAMDEE_PRODUCTION_COOKIE_KEY:e.HAMDEE_OWNER_COOKIE_KEY;
-    requireThat(!production||(e.HAMDEE_PRODUCTION_COOKIE_KEY_APPROVAL==='approved-distinct-production-key'&&
-      !!encodedCookieKey&&encodedCookieKey!==e.HAMDEE_OWNER_COOKIE_KEY),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
+    // A separately generated DEMO key is configured only on this Preview branch.
+    // No Production key or database fallback is accepted by this branch.
+    const encodedCookieKey=e.HAMDEE_OWNER_COOKIE_KEY;
+    requireThat(!e.HAMDEE_PRODUCTION_COOKIE_KEY,503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
     requireThat(!!encodedCookieKey&&/^[A-Za-z0-9_-]{43}$/.test(encodedCookieKey),503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
     const cookieKey=Buffer.from(encodedCookieKey,'base64url');requireThat(cookieKey.length===32&&cookieKey.toString('base64url')===encodedCookieKey,503,'CONFIGURATION_UNAVAILABLE','Dedicated owner configuration is required.');
     stage='security_budgets';
@@ -145,16 +138,14 @@ function configuredApplication():OwnerApplication|null {
     stage='provider_configuration';
     const provider=createManagedOwnerProvider({supabaseUrl:e.HAMDEE_SUPABASE_URL,publishableKey:e.HAMDEE_SUPABASE_PUBLISHABLE_KEY??'',requestTimeoutMs:timeout});
     stage='database_configuration';
-    const database=hosted?new HostedPostgresDatabase(e.HAMDEE_DATABASE_URL,reviewedHostedDatabasePins,e.HAMDEE_DATABASE_CA_PEM):new LocalPostgresDatabase(e.HAMDEE_DATABASE_URL);
+    const database=new HostedPostgresDatabase(e.HAMDEE_DATABASE_URL,reviewedHostedDatabasePins,e.HAMDEE_DATABASE_CA_PEM);
     stage='application_configuration';
     const app=createOwnerApplication({policy:{owner:{issuer:e.HAMDEE_AUTH_ISSUER,subject:e.HAMDEE_OWNER_SUBJECT},ownerEmail:e.HAMDEE_OWNER_EMAIL!,projectRef:e.HAMDEE_PROJECT_REF,
       origin:e.HAMDEE_OWNER_ORIGIN!,cookieSecure:true,idleTimeoutMs,absoluteTimeoutMs,
       csrfLifetimeMs},
       cookieKey,clock:()=>Date.now(),randomBytes,
       provider,database,
-      // Existing marker literals are reviewed legacy project identity pins,
-      // not a claim that this database contains only synthetic information.
-      databaseEnvironment:hosted?'synthetic-development':'local-test',
+      databaseEnvironment:'synthetic-development',
       limiter:{async consume(flow,_key,now){let b=buckets.get(flow);if(!b||now>=b.reset){b={count:0,reset:now+window,blocked:0};buckets.set(flow,b);}
         if(now<b.blocked)return false;if(++b.count>bounds){b.blocked=now+backoff;return false;}return true;}},
       audit:{async append(event){console.info(JSON.stringify(event));}}
@@ -165,8 +156,16 @@ function configuredApplication():OwnerApplication|null {
 /** No normal request can select the injected test provider. Hosted access also
  * requires separately reviewed pins, activation approval and Preview scope. */
 export async function handleOwnerAuthRequest(request:Request):Promise<Response> {
-  return configuredApplication()?.handleAuth(request)??unavailable();
+  if(new URL(request.url).origin!==HAMDEE_DEMO_ORIGIN)return unavailable();
+  const app=configuredApplication();if(!app)return unavailable();
+  const response=await app.handleAuth(request);
+  if(response.ok&&request.method==='GET'&&new URL(request.url).pathname==='/api/hamdee/auth/state'){
+    response.headers.set('X-Hamdee-Project-Ref',HAMDEE_DEVELOPMENT_PROJECT);
+    response.headers.set('X-Hamdee-Environment','isolated-demo');
+  }
+  return response;
 }
 export async function handleOwnerPropertyRequest(request:Request):Promise<Response> {
+  if(new URL(request.url).origin!==HAMDEE_DEMO_ORIGIN)return unavailable();
   return configuredApplication()?.handleProperties(request)??unavailable();
 }
