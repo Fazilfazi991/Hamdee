@@ -13,7 +13,7 @@ async function login(page: Page) {
   await page.getByLabel(/email/i).fill(server.fixture.inputs.email);
   await page.getByLabel(/password/i).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: /sign in|log in/i }).click();
-  await expect(page.getByRole('heading', { name: /dashboard|property overview/i }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   await expect(page.locator('#owner-mfa, #enrollment-qr')).toHaveCount(0);
 }
 async function navigate(page: Page, name: string) {
@@ -51,6 +51,8 @@ test('owner UI: password login, keyboard property CRUD/archive/restore/audit and
   await expect(page.getByRole('cell', { name: 'Synthetic owner browser archive', exact: true })).toBeVisible();
   await page.screenshot({ path: `evidence/owner-crm/${info.project.name}-owner-audit.png`, fullPage: true });
   await navigate(page, 'Dashboard');
+  await expect(page.getByText('Synthetic Owner Updated Villa', { exact: true })).toHaveCount(0);
+  await properties(page);
   await expect(page.getByText('Synthetic Owner Updated Villa', { exact: true }).first()).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy(); expect(errors).toEqual([]);
 });
@@ -62,7 +64,7 @@ test('owner UI: invalid password shows accessible error, clears password and nev
   await expect(page.getByRole('alert').first()).toBeFocused();
   await page.getByLabel(/password/i).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: /sign in|log in/i }).click();
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   await expect(page.locator('#owner-mfa, #enrollment-qr')).toHaveCount(0);
 });
 test('owner UI: empty filtered property results recover without changing saved records', async ({ page }) => {
@@ -118,9 +120,13 @@ test('owner UI: rejected expense CSRF retains the draft for an explicit retry', 
   await expect(dialog).not.toBeVisible();
   await expect(page.getByRole('region', { name: 'Property expense register', exact: true }).getByRole('row').filter({ hasText: 'Synthetic retained CSRF vendor' })).toHaveCount(1);
   await navigate(page, 'Dashboard');
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Property monthly income and expenses', exact: true }).getByRole('cell', { name: 'QAR -7.50', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Property monthly income and expenses', exact: true })).toHaveCount(0);
   await page.screenshot({ path: `evidence/owner-crm/${info.project.name}-saved-expense-dashboard.png`, fullPage: true });
+  await navigate(page, 'Reports');
+  await page.getByLabel('Expense month', { exact: true }).fill('2026-10'); await page.getByLabel('Report through', { exact: true }).fill('2026-10-15');
+  await page.getByRole('button', { name: 'Apply expense filters', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Property monthly income and expenses', exact: true }).getByRole('cell', { name: 'QAR -7.50', exact: true })).toBeVisible();
 });
 test('owner UI: logout in another tab wins over delayed reply and preserves demo storage isolation', async ({ page }) => {
   const sentinel = JSON.stringify({ properties: [{ name: 'SYNTHETIC_DEMO_MUST_NOT_APPEAR', rent: 123456 }] });
@@ -132,7 +138,7 @@ test('owner UI: logout in another tab wins over delayed reply and preserves demo
   // A busy modal intentionally blocks its page's top bar. Use a real second
   // owner tab to perform global logout, then make the first tab observe loss.
   const second = await page.context().newPage(); await second.goto(server.url + '/workspace/index.html#dashboard');
-  await expect(second.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await expect(second.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   await second.getByRole('button', { name: /sign out|log out/i }).click();
   await page.evaluate(() => { window.location.hash = 'dashboard'; });
   await expect(page.getByLabel(/email/i)).toBeVisible(); release();
@@ -164,7 +170,9 @@ test('owner UI: returning owner signs in directly with password and retains save
   await page.getByRole('button', { name: /sign out|log out/i }).click();
   await page.getByLabel(/email/i).fill(server.fixture.inputs.email); await page.getByLabel(/password/i).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: /sign in|log in/i }).click();
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
+  await expect(page.getByText('Synthetic returning owner property', { exact: true })).toHaveCount(0);
+  await properties(page);
   await expect(page.getByText('Synthetic returning owner property', { exact: true })).toBeVisible();
   await expect(page.locator('#owner-mfa, #enrollment-qr')).toHaveCount(0);
 });

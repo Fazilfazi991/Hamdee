@@ -10,7 +10,7 @@ test.afterEach(async () => { await server?.close(); });
 async function login(page: Page) {
   await page.goto(server.url + '/workspace/index.html#dashboard'); await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email); await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
 }
 async function nav(page: Page, name: string) { const menu = page.getByRole('button', { name: 'Open navigation', exact: true }); if (await menu.isVisible()) await menu.click(); await page.getByRole('link', { name, exact: true }).click(); }
 async function setup(page: Page) {
@@ -63,7 +63,12 @@ test('Expense UI QA: owner costs/partial payments/maintenance/warranty/history/r
   expect(download.suggestedFilename()).toBe('HAMDEE-operations-2026-10.csv'); const stream = await download.createReadStream(); expect(stream).toBeTruthy(); const chunks: Buffer[] = []; for await (const chunk of stream!) chunks.push(Buffer.from(chunk)); const csv = Buffer.concat(chunks).toString('utf8');
   expect(csv).toContain("\"'=Synthetic Expense Browser Villa\""); expect(csv).toContain('"-1250.75"'); expect(csv).toContain('not distributable profit');
   await page.screenshot({ path: `evidence/expense-qa/${info.project.name}-operations.png`, fullPage: true }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy(); expect(errors).toEqual([]);
-  await nav(page, 'Dashboard'); await expect(page.getByRole('region', { name: 'Property monthly income and expenses', exact: true }).getByRole('cell', { name: 'QAR -1250.75', exact: true })).toBeVisible(); await page.screenshot({ path: `evidence/expense-qa/${info.project.name}-dashboard.png`, fullPage: true });
+  await nav(page, 'Dashboard'); await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Property monthly income and expenses', exact: true })).toHaveCount(0);
+  await page.screenshot({ path: `evidence/expense-qa/${info.project.name}-dashboard.png`, fullPage: true });
+  await nav(page, 'Reports'); await page.getByLabel('Expense month', { exact: true }).fill('2026-10'); await page.getByLabel('Report through', { exact: true }).fill('2026-10-15');
+  await page.getByRole('button', { name: 'Apply expense filters', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Property monthly income and expenses', exact: true }).getByRole('cell', { name: 'QAR -1250.75', exact: true })).toBeVisible();
 });
 
 test('Expense UI QA: duplicate invoice/error retention/logout protect local expense records', async ({ page }, info) => {

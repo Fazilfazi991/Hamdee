@@ -17,7 +17,7 @@ async function login(page: Page) {
   await page.getByLabel(/email/i).fill(server.fixture.inputs.email);
   await page.getByLabel(/password/i).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: /sign in/i }).click();
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   const menu = page.getByRole('button', { name: 'Open navigation', exact: true });
   if (await menu.isVisible()) await menu.click();
   await page.getByRole('link', { name: 'Villas & Properties', exact: true }).click();

@@ -13,7 +13,7 @@ test.beforeEach(async({realServices})=>{
 
 });
 test.afterEach(async()=>{await server?.close();});
-async function login(page:Page){await page.goto(server.url+'/workspace/index.html');await page.getByLabel('Email',{exact:true}).fill(server.fixture.inputs.email);await page.getByLabel('Password',{exact:true}).fill(server.fixture.inputs.password);await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('heading',{name:'Property overview',exact:true})).toBeVisible();}
+async function login(page:Page){await page.goto(server.url+'/workspace/index.html');await page.getByLabel('Email',{exact:true}).fill(server.fixture.inputs.email);await page.getByLabel('Password',{exact:true}).fill(server.fixture.inputs.password);await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('heading',{name:'Business Overview',exact:true})).toBeVisible();}
 async function visit(page:Page,route:string,heading:string){await page.evaluate(hash=>{window.location.hash=hash;},route);await expect(page.getByRole('heading',{name:heading,exact:true})).toBeVisible();await expect(page.locator('#operations-workspace')).toHaveAttribute('aria-busy','false');}
 const ids={vehicle:'00000000-0000-4000-8000-000000000101',agreement:'00000000-0000-4000-8000-000000000102',company:'00000000-0000-4000-8000-000000000103',personal:'00000000-0000-4000-8000-000000000104',receipt:'00000000-0000-4000-8000-000000000105'};
 async function contract(page:Page,write?:(route:Route,body:Record<string,unknown>,count:number)=>Promise<void>){

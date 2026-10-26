@@ -1,43 +1,97 @@
-import {esc,panel,table,defaultCollectionMonth} from './rental.js';
+import {esc,defaultCollectionMonth} from './rental.js';
 let current=null;
-const today=()=>new Date().toISOString().slice(0,10);
-const money=(value,currency)=>value===null||value===undefined?'<span class="badge amber">Not verified</span>':`${esc(currency)} ${esc(value)}`;
-const link=(name,path)=>`<a class="button subtle" href="${esc(path)}">${esc(name)}</a>`;
+const today=()=>new Date().toISOString().slice(0,10),amount=/^-?\d+(?:\.\d+)?$/;
+const monthName=value=>new Date(value+'-01T00:00:00Z').toLocaleDateString('en-GB',{month:'short',year:'numeric',timeZone:'UTC'});
+const shortMonthName=value=>new Date(value+'-01T00:00:00Z').toLocaleDateString('en-GB',{month:'short',year:'2-digit',timeZone:'UTC'});
+const dateName=value=>value?new Date(value+'T00:00:00Z').toLocaleDateString('en-GB',{day:'numeric',month:'short',timeZone:'UTC'}):null;
+const icon=name=>typeof window.icon==='function'?window.icon(({'arrow-right':'arrow',refresh:'arrow',expenses:'document'})[name]||name):'';
 const live=c=>current===c&&!c.controller.signal.aborted&&!c.signal.aborted&&c.isCurrent();
+const verified=value=>typeof value==='string'&&amount.test(value);
+export function formatOverviewAmount(value){
+ if(!verified(value))return 'Not verified';
+ const [whole,fraction]=value.split('.');
+ return whole.replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+(fraction===undefined?'00':fraction.padEnd(2,'0'));
+}
+const money=(value,currency)=>verified(value)?`<span class="overview-money"><span class="overview-currency">${esc(currency)}</span> ${esc(formatOverviewAmount(value))}</span>`:'<span class="overview-unverified">Not verified</span>';
+const visualNumber=value=>{const n=verified(value)?Number(value):NaN;return Number.isFinite(n)&&n>=0?n:null;};
+const currencyRow=(rows,selected)=>rows.find(row=>row.currency===selected)||rows.find(row=>verified(row.rent?.expected))||rows[0];
 function clear(c){c.controller.abort();c.signal.removeEventListener('abort',c.onAbort);c.target.innerHTML='';if(current===c)current=null;}
 export function resetDailyDashboard(){if(current)clear(current);}
-export function dailyDashboardMarkup(d){
- const company=d.accounts.company;
- return `<form class="toolbar rental-filters" data-daily-filters><label>Collection month<input type="month" name="month" value="${esc(d.month)}" required></label><label>Balances through<input type="date" name="asOf" value="${esc(d.asOf)}" required></label><button type="submit" class="button subtle">Update daily overview</button></form>`+
- panel('Company cash & bank','Saved company accounts only. Staff-held money, deposits and personal finances remain separately identified.',table(['Company account','Type','Currency','Saved balance'],company.map(row=>[esc(row.name),esc(row.kind),esc(row.currency),money(row.balance,row.currency)]),'Company account balances'),link(d.accounts.companySetupRequired?'Set up company accounts':'Open Company Finance','#company'))+
- (d.accounts.companySetupRequired?'<p class="operations-notice" role="status">Company account setup is required. Confirm the account, currency, opening date and opening amount in Company Finance; no opening balance is assumed.</p>':'')+
- panel('Company funds by currency','Cash, bank and collector custody are separate figures; no combined or distributable-profit balance is inferred.',table(['Currency','Company cash','Company bank','Held by collectors'],d.balances.map(row=>[esc(row.currency),money(row.companyCash,row.currency),money(row.companyBank,row.currency),money(row.staffHeld,row.currency)]),'Company funds by currency'))+
- panel('Monthly rent','Confirmed issued dues and their saved allocations for '+esc(d.month)+'. Earlier advances can be applied explicitly; deposits are not rent income.',table(['Currency','Rent due','Allocated to rent','Outstanding','Unapplied advances','Deposits held','Pending cheques'],d.rent.map(row=>[esc(row.currency),money(row.expected,row.currency),money(row.allocated,row.currency),money(row.outstanding,row.currency),money(row.unappliedAdvances,row.currency),money(row.depositHeld,row.currency),money(row.pendingCheques,row.currency)]),'Daily rent overview'),link('Collect rent in a villa','#properties'))+
- panel('Property expenses','Recorded cost obligations, confirmed payments and pending cheques remain distinct.',table(['Currency','Recorded costs','Paid','Pending cheques'],d.expenses.map(row=>[esc(row.currency),money(row.recorded,row.currency),money(row.paid,row.currency),money(row.pendingCheques,row.currency)]),'Daily property expenses'),link('Open expenses','#expenses'))+
- panel('Staff-held collections','Custody remaining with each collector. A handover moves existing money; it does not create income.',table(['Collector','Currency','Held amount'],d.staff.map(row=>[esc(row.name),esc(row.currency),money(row.balance,row.currency)]),'Daily collector custody'),link('Open Staff Collections','#staff-collections'))+
- panel('Recent rental receipts','Receipt dates and classifications are shown as saved. Deposits, advances and pending cheques are not relabeled as paid rent.',table(['Villa / room','Tenant','Received','Purpose','Method / status','Amount'],d.recentCollections.map(row=>[`<a class="link" href="#properties/${esc(row.propertyId)}/collections">${esc(row.propertyName)} · ${esc(row.roomCode)}</a>`,esc(row.tenantName),esc(row.date),esc(row.kind),esc(row.method)+' · '+esc(row.status),money(row.amount,row.currency)]),'Recent rental receipts'))+
- panel('Upcoming rent dues','Only issued obligations appear here. Historical October amounts do not create new agreements or monthly dues.',table(['Villa / room','Tenant','Rent month','Due date','Due','Allocated','Outstanding'],d.upcomingDues.map(row=>[`<a class="link" href="#properties/${esc(row.propertyId)}/collections">${esc(row.propertyName)} · ${esc(row.roomCode)}</a>`,esc(row.tenantName),esc(row.period),esc(row.dueDate),money(row.amount,row.currency),money(row.paid,row.currency),money(row.outstanding,row.currency)]),'Upcoming rental dues'))+
- `<p class="muted-help">${esc(d.basis)} Personal accounts stay in ${link('Personal Finance','#personal-finance')}.</p>`;
+function kpi(label,value,currency,note,path,glyph,primary=false){
+ return `<a class="overview-kpi${primary?' overview-kpi-primary':''}" href="${path}" aria-label="${esc(label)}: ${esc(verified(value)?currency+' '+formatOverviewAmount(value):'Not verified')}. ${esc(note)}"><span class="overview-kpi-label">${esc(label)}${icon(glyph)}</span><strong>${money(value,currency)}</strong><span class="overview-kpi-note">${esc(note)}</span></a>`;
+}
+function collectionChart(row,currency,period){
+ const r=row?.rent,expected=visualNumber(r?.expected),allocated=visualNumber(r?.allocated),outstanding=visualNumber(r?.outstanding);
+ const hasDue=expected!==null&&expected>0&&allocated!==null&&outstanding!==null;
+ // Ratios only position SVG marks; displayed money stays the exact server string.
+ const share=hasDue?Math.min(100,Math.max(0,allocated/expected*100)):0;
+ const label=hasDue?`${currency} ${formatOverviewAmount(r.allocated)} allocated and ${formatOverviewAmount(r.outstanding)} outstanding against ${formatOverviewAmount(r.expected)} issued rent dues.`:'No confirmed issued rent dues for this month and currency.';
+ return `<section class="overview-chart-card" aria-labelledby="overview-collection-title"><div class="overview-card-heading"><div><h2 id="overview-collection-title">Collection Status</h2><p>Issued rent dues · ${esc(monthName(period))}</p></div><a class="overview-detail-link" href="#collections" aria-label="Open rent collections">${icon('arrow-right')}</a></div><div class="overview-donut-content"><div class="overview-donut"><svg viewBox="0 0 180 180" role="img" aria-label="${esc(label)}"><circle class="overview-donut-track" cx="90" cy="90" r="68"/><circle class="overview-donut-allocated" cx="90" cy="90" r="68" pathLength="100" stroke-dasharray="${share} 100" transform="rotate(-90 90 90)"/></svg><div class="overview-donut-center"><small>${hasDue?'Rent due':'Rent terms'}</small><strong>${hasDue?esc(formatOverviewAmount(r.expected)):'Not verified'}</strong><span>${hasDue?esc(currency):'Confirm issued dues'}</span></div></div><dl class="overview-donut-legend"><div><dt><i class="overview-dot allocated"></i>Allocated to rent</dt><dd>${money(r?.allocated,currency)}</dd></div><div><dt><i class="overview-dot pending"></i>Outstanding rent</dt><dd>${money(r?.outstanding,currency)}</dd></div>${hasDue?'':'<p class="overview-empty-note">No confirmed issued dues. <a href="#properties">Confirm room terms</a> to begin.</p>'}</dl></div><div class="overview-rental-separation"><span>Unallocated advances <b>${money(r?.unappliedAdvances,currency)}</b></span><span>Deposits held <b>${money(r?.depositHeld,currency)}</b></span></div></section>`;
+}
+function trendChart(row,currency,basis){
+ const trend=row?.trend||[],ready=row?.trendReady===true&&trend.length>=2;
+ let content='<div class="overview-trend-empty"><span class="overview-empty-icon">'+icon('reports')+'</span><strong>Not enough verified history</strong><p>Saved cash/bank receipts and recorded costs appear when at least two months have activity.</p></div>';
+ if(ready){
+  const max=Math.max(...trend.flatMap(point=>[visualNumber(point.collections)||0,visualNumber(point.expenses)||0]),1);
+  const scaleValue=trend.flatMap(point=>[point.collections,point.expenses]).sort((a,b)=>(visualNumber(b)||0)-(visualNumber(a)||0))[0];
+  const exactValues=trend.map(point=>`${monthName(point.month)}: ${currency} ${formatOverviewAmount(point.collections)} cash/bank collections; ${currency} ${formatOverviewAmount(point.expenses)} recorded costs.`).join(' ');
+  const width=560,height=172,left=16,right=12,top=30,bottom=36,chartHeight=height-top-bottom,step=(width-left-right)/trend.length,barWidth=Math.min(24,step/3);
+  content=`<svg class="overview-bar-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Monthly cash and bank collections versus recorded property and vehicle costs in ${esc(currency)}. Months with no source activity are omitted." aria-describedby="overview-trend-values"><desc id="overview-trend-values">${esc(exactValues)}</desc><text class="overview-chart-scale" x="${left}" y="20">${esc(currency)} · top ${esc(formatOverviewAmount(scaleValue))}</text><line class="overview-chart-baseline" x1="${left}" y1="${height-bottom}" x2="${width-right}" y2="${height-bottom}"/><text class="overview-chart-scale" x="${left}" y="${height-bottom+15}">0</text>${trend.map((point,index)=>{
+   const x=left+step*(index+.5),collected=visualNumber(point.collections)||0,expenses=visualNumber(point.expenses)||0,ch=collected/max*chartHeight,eh=expenses/max*chartHeight;
+   return `<g><rect class="overview-bar-receipts" x="${x-barWidth-2}" y="${height-bottom-ch}" width="${barWidth}" height="${ch}" rx="3"><title>${esc(monthName(point.month))}: ${esc(currency)} ${esc(formatOverviewAmount(point.collections))} cash/bank collections</title></rect><rect class="overview-bar-expenses" x="${x+2}" y="${height-bottom-eh}" width="${barWidth}" height="${eh}" rx="3"><title>${esc(monthName(point.month))}: ${esc(currency)} ${esc(formatOverviewAmount(point.expenses))} recorded property &amp; vehicle costs</title></rect><text class="overview-chart-month overview-chart-month-full" x="${x}" y="${height-12}" text-anchor="middle">${esc(monthName(point.month))}</text><text class="overview-chart-month overview-chart-month-short" x="${x}" y="${height-12}" text-anchor="middle" aria-hidden="true">${esc(shortMonthName(point.month))}</text></g>`;
+  }).join('')}</svg><details class="overview-monthly-values"><summary>View monthly values</summary><ul>${trend.map(point=>`<li><strong>${esc(monthName(point.month))}</strong><span>Cash/bank collections ${money(point.collections,currency)}</span><span>Recorded costs ${money(point.expenses,currency)}</span></li>`).join('')}</ul></details>`;
+ }
+ return `<section class="overview-chart-card" aria-labelledby="overview-trend-title"><div class="overview-card-heading"><div><h2 id="overview-trend-title">Monthly Collections vs Expenses</h2><p>Receipt-date cash/bank collections · recorded costs</p></div><a class="overview-detail-link" href="#reports" aria-label="Open monthly reports">${icon('arrow-right')}</a></div>${content}<div class="overview-trend-footer"><span><i class="overview-dot allocated"></i>Cash/bank collections</span><span><i class="overview-dot cost"></i>Recorded costs</span><small>${ready?'Activity months only · '+esc(currency):'No invented prior-month figures'}</small></div><p class="overview-sr-only">${esc(basis.trendCollections)} ${esc(basis.expenses)}</p></section>`;
+}
+function operational(label,value,currency,note,path,glyph){
+ return `<a class="overview-operation" href="${path}"><span class="overview-operation-icon">${icon(glyph)}</span><span class="overview-operation-copy"><span>${esc(label)}</span><strong>${money(value,currency)}</strong><small>${esc(note)}</small></span><span class="overview-operation-arrow" aria-hidden="true">↗</span></a>`;
+}
+function pendingCheques(o,currency){
+ return `<div class="overview-operation"><span class="overview-operation-icon">${icon('cheques')}</span><span class="overview-operation-copy"><span>Pending cheques</span><strong>${money(o?.pendingCheques,currency)}</strong><small>Incoming only · through cutoff<br><a href="#cheques">Rent ${money(o?.pendingRentCheques,currency)}</a> · <a href="#car-rentals">Car ${money(o?.pendingCarCheques,currency)}</a></small></span></div>`;
+}
+export function dailyDashboardMarkup(d,selectedCurrency=''){
+ const rows=d.overview?.currencies||[],basis=d.overview?.basis||{},row=currencyRow(rows,selectedCurrency),currency=row?.currency||'',o=row?.operations;
+ const upcomingNote=o?.upcomingCount?`${o.upcomingCount} issued ${o.upcomingCount===1?'due':'dues'} · next ${dateName(o.nextDueDate)||'date not verified'}`:row?.rent?.expected===null||!row?'Confirm issued rent terms':'No upcoming issued dues';
+ return `<div class="business-overview"><header class="overview-header"><div><span class="eyebrow">HAMDEE · DAILY OPERATIONS</span><h1>Business Overview</h1><p>Saved business figures. One currency at a time.</p></div><form class="overview-filters" data-daily-filters aria-label="Business overview filters"><label>Reporting month<input type="month" name="month" value="${esc(d.month)}" required></label><label>Currency<select name="currency" aria-label="Reporting currency" ${rows.length?'':'disabled'}>${rows.length?rows.map(r=>`<option value="${esc(r.currency)}" ${r===row?'selected':''}>${esc(r.currency)}</option>`).join(''):'<option>No verified currency</option>'}</select></label><label>Reporting cutoff<input type="date" name="asOf" value="${esc(d.asOf)}" required></label><button type="submit" class="overview-update" aria-label="Update business overview">${icon('refresh')}<span>Update</span></button></form></header><section class="overview-kpis" aria-label="Financial overview">${kpi('Total Collected',row?.totalCollected,currency,'Allocated to issued rent dues','#collections','collections',true)}${kpi('Pending Collection',row?.pendingCollection,currency,'Issued rent still outstanding','#collections','clock')}${kpi('Company Cash in Hand',row?.companyCash,currency,'Confirmed openings + saved movements','#company','wallet')}${kpi('Company Bank Balance',row?.companyBank,currency,'Confirmed company bank accounts','#company','company')}${kpi('Monthly Expenses',row?.monthlyExpenses,currency,'Recorded property & vehicle costs','#expenses','expenses')}</section><div class="overview-charts">${collectionChart(row,currency,d.month)}${trendChart(row,currency,basis)}</div><section class="overview-operations" aria-label="Operational indicators">${operational('Car rental collections',o?.carCollected,currency,'Recorded receipts · selected month','#car-rentals','briefcase')}${operational('Money held by staff',o?.staffHeld,currency,'Existing collection custody','#staff-collections','partners')}${pendingCheques(o,currency)}${operational('Upcoming rent dues',o?.upcomingAmount,currency,upcomingNote,'#collections','calendar')}</section><div class="overview-footnote"><span>${icon('lock')}Personal finance and unposted history are excluded.</span><details><summary>Reporting basis</summary><div><p><strong>Total Collected:</strong> ${esc(basis.totalCollected||'Confirm issued rental dues before totals are available.')}</p><p><strong>Trend:</strong> ${esc(basis.trendCollections||'Original saved cash/bank rent and car receipts by actual receipt date; no advances, deposits, transfers or handovers.')}</p><p><strong>Expenses:</strong> ${esc(basis.expenses||'Recorded property and vehicle costs by expense date, not distributable profit.')}</p><p><strong>Balances:</strong> ${esc(basis.balances||'Confirmed company account openings and saved movements; no opening balance is assumed.')}</p><a href="#company">${d.accounts?.companySetupRequired?'Set up company accounts':'Open Company Finance'}</a></div></details></div></div>`;
 }
 function validate(result,c){
- const d=result?.data;
- if(!d||d.month!==c.month||d.asOf!==c.asOf||d.moneyUnit!=='decimal-major-unit-strings'||!d.accounts||!Array.isArray(d.accounts.company)||typeof d.accounts.companySetupRequired!=='boolean'||!['balances','rent','expenses','staff','recentCollections','upcomingDues'].every(key=>Array.isArray(d[key]))||typeof d.basis!=='string')throw new Error('Daily overview is unavailable');
+ const d=result?.data,overview=d?.overview;
+ if(!d||d.month!==c.month||d.asOf!==c.asOf||d.moneyUnit!=='decimal-major-unit-strings'||d.overviewVersion!==1||!overview||!Array.isArray(overview.currencies)||!overview.basis||!['totalCollected','trendCollections','expenses','balances'].every(key=>typeof overview.basis[key]==='string'))throw new Error('Business overview is unavailable');
+ const keys=new Set();
+ for(const row of overview.currencies){
+  if(!/^[A-Z]{3}$/.test(row.currency)||keys.has(row.currency)||!row.rent||!row.operations||typeof row.trendReady!=='boolean'||!Array.isArray(row.trend))throw new Error('Business overview is unavailable');keys.add(row.currency);
+  const values=[row.totalCollected,row.pendingCollection,row.companyCash,row.companyBank,row.monthlyExpenses,...['expected','allocated','outstanding','unappliedAdvances','depositHeld','pendingCheques'].map(key=>row.rent[key]),...['carCollected','staffHeld','pendingCheques','pendingRentCheques','pendingCarCheques','upcomingAmount'].map(key=>row.operations[key])];
+  if(!values.every(value=>value===null||verified(value))||!Number.isSafeInteger(row.operations.upcomingCount)||row.operations.upcomingCount<0||!(row.operations.nextDueDate===null||/^\d{4}-\d{2}-\d{2}$/.test(row.operations.nextDueDate))||!row.trend.every(point=>/^\d{4}-\d{2}$/.test(point.month)&&verified(point.collections)&&verified(point.expenses)))throw new Error('Business overview is unavailable');
+ }
  return d;
 }
+function paint(c,d){
+ if(!live(c))return;c.currency=currencyRow(d.overview.currencies,c.currency)?.currency||'';
+ c.target.innerHTML=dailyDashboardMarkup(d,c.currency);
+ c.target.querySelector('[data-daily-filters]').addEventListener('submit',event=>{event.preventDefault();if(!live(c))return;const fields=new FormData(event.target);c.month=String(fields.get('month'));c.asOf=String(fields.get('asOf'));c.currency=String(fields.get('currency')||'');void read(c);});
+ c.target.querySelector('[name="currency"]').addEventListener('change',event=>{
+  if(!live(c))return;
+  const draft=event.target.form?new FormData(event.target.form):null;
+  c.currency=event.target.value;paint(c,d);
+  // Currency repaints the saved aggregate. Preserve unsubmitted date filters;
+  // the displayed chart period stays d.month until an explicit Update succeeds.
+  for(const name of ['month','asOf'])if(draft?.get(name))c.target.querySelector(`[name="${name}"]`).value=String(draft.get(name));
+  c.target.querySelector('[name="currency"]').focus();
+ });
+}
 async function read(c){
- if(!live(c))return;c.target.setAttribute('aria-busy','true');c.target.innerHTML='<div class="empty" role="status">Loading saved daily operations…</div>';
+ if(!live(c))return;c.target.setAttribute('aria-busy','true');c.target.innerHTML='<div class="overview-loading" role="status"><span class="eyebrow">HAMDEE · DAILY OPERATIONS</span><h1>Business Overview</h1><p>Loading saved business figures…</p></div>';
  try{
   const result=await c.api.operationsDashboard({month:c.month,asOf:c.asOf},c.controller.signal);if(!live(c))return;
   if(!await c.verifyAccess()){if(live(c))clear(c);return;}if(!live(c))return;
-  c.target.innerHTML=dailyDashboardMarkup(validate(result,c));
-  c.target.querySelector('[data-daily-filters]').addEventListener('submit',event=>{event.preventDefault();if(!live(c))return;const fields=new FormData(event.target);c.month=String(fields.get('month'));c.asOf=String(fields.get('asOf'));void read(c);});
+  paint(c,validate(result,c));
  }catch(error){
   if(!live(c))return;if(error.status===401||error.code==='OWNER_ACCESS_DENIED'){clear(c);await c.onAccessLoss(error);return;}
-  c.target.innerHTML=panel('Daily overview unavailable','Your villas and existing modules remain available. Retry to load the saved operational figures.','',`<button class="button subtle" type="button" data-daily-retry>Retry daily overview</button>`);c.target.querySelector('[data-daily-retry]').addEventListener('click',()=>{if(live(c))void read(c);});
+  c.target.innerHTML='<section class="overview-loading" role="status"><span class="eyebrow">HAMDEE · DAILY OPERATIONS</span><h1>Business Overview</h1><h2>Saved overview unavailable</h2><p>Your villas and existing modules remain available. No unverified balances are shown.</p><button class="button subtle" type="button" data-daily-retry>Retry business overview</button><a class="button subtle" href="#properties">Open Villas &amp; Properties</a></section>';c.target.querySelector('[data-daily-retry]').addEventListener('click',()=>{if(live(c))void read(c);});
  }finally{if(live(c))c.target.setAttribute('aria-busy','false');}
 }
 export async function renderDailyDashboard(target,options){
  resetDailyDashboard();const date=today();
- const c={...options,target,month:options.month||defaultCollectionMonth(date),asOf:options.asOf||date,controller:new window.AbortController(),onAbort:null};
+ const c={...options,target,month:options.month||defaultCollectionMonth(date),asOf:options.asOf||date,currency:options.currency||'',controller:new window.AbortController(),onAbort:null};
  c.onAbort=()=>clear(c);current=c;c.signal.addEventListener('abort',c.onAbort,{once:true});if(!live(c)){clear(c);return;}await read(c);
 }

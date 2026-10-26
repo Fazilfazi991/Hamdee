@@ -13,15 +13,20 @@ async function login(page: Page) {
   await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email);
   await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   await expect(page.locator('#main')).toHaveAttribute('aria-busy', 'false');
+}
+async function nav(page: Page, name: string) {
+  const menu = page.getByRole('button', { name: 'Open navigation', exact: true });
+  if (await menu.isVisible()) await menu.click();
+  await page.getByRole('link', { name, exact: true }).click();
 }
 
 const emptyCars = { moneyUnit: 'decimal-major-unit-strings', vehicles: [], agreements: [], availability: [], balances: [], collections: [], expenses: [], history: [], summary: [] };
 
 test('villa rooms start alongside the property read, consume once, and refresh saved rooms and report cutoffs', async ({ page }) => {
   const source = await seedPropertyReceipt(server.fixture, { amount: '100.00' });
-  await login(page); await expect(page.locator('#rental-dashboard')).toHaveAttribute('aria-busy', 'false');
+  await login(page); await expect(page.locator('#daily-dashboard')).toHaveAttribute('aria-busy', 'false');
   const reads: URL[] = []; page.on('request', request => { const url = new URL(request.url()); if (url.pathname === '/api/hamdee/v1/rental' && request.method() === 'GET' && url.searchParams.get('propertyId') === source.property.id) reads.push(url); });
   let release!: () => void, entered!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; }), propertyStarted = new Promise<void>(resolve => { entered = resolve; });
@@ -54,7 +59,7 @@ test('villa rooms start alongside the property read, consume once, and refresh s
 
 test('villa expense and room reads begin before the property resolves and later filters read new saved costs', async ({ page }) => {
   const source = await seedPropertyReceipt(server.fixture, { amount: '100.00' });
-  await login(page); await expect(page.locator('#expense-dashboard')).toHaveAttribute('aria-busy', 'false');
+  await login(page); await expect(page.locator('#daily-dashboard')).toHaveAttribute('aria-busy', 'false');
   let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let hold = true;
   await page.route('**/api/hamdee/v1/properties/' + source.property.id, async route => {
     if (!hold) { await route.continue(); return; } hold = false;
@@ -75,14 +80,14 @@ test('villa expense and room reads begin before the property resolves and later 
 
 test('a cancelled or rejected property route cannot expose prefetched rental records or unhandled failures', async ({ page }) => {
   const source = await seedPropertyReceipt(server.fixture, { amount: '100.00' }); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  await login(page); await expect(page.locator('#rental-dashboard')).toHaveAttribute('aria-busy', 'false');
+  await login(page); await expect(page.locator('#daily-dashboard')).toHaveAttribute('aria-busy', 'false');
   let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
   await page.route('**/api/hamdee/v1/properties/' + source.property.id, async route => { await held; try { await route.fulfill({ status: 403, json: { error: { code: 'PROPERTY_ACCESS_DENIED', message: 'Property access denied.' } } }); } catch { /* A replaced route is aborted. */ } });
   await page.route('**/api/hamdee/v1/rental?*', route => new URL(route.request().url()).searchParams.get('propertyId') === source.property.id ? route.fulfill({ status: 503, json: { error: { code: 'STORAGE_UNAVAILABLE', message: 'Synthetic rejected parallel read.' } } }) : route.continue());
   const started = page.waitForRequest(request => new URL(request.url()).pathname === '/api/hamdee/v1/rental' && new URL(request.url()).searchParams.get('propertyId') === source.property.id);
   await page.evaluate(hash => { window.location.hash = hash; }, 'properties/' + source.property.id + '/rooms'); await started;
   await page.evaluate(() => { window.location.hash = 'dashboard'; }); release();
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Rooms and occupancy', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await expect(page.getByLabel('Email', { exact: true })).toBeVisible(); expect(errors).toEqual([]);
 });
@@ -104,7 +109,7 @@ test('authorized Staff records stay accessible while company account discovery i
 test('authorized module discovery starts before a slow dashboard and independent services become accessible', async ({ page }) => {
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
-  await page.route('**/api/hamdee/v1/dashboard', async route => {
+  await page.route('**/api/hamdee/v1/operations-dashboard?*', async route => {
     const response = await route.fetch(); await held;
     try { await route.fulfill({ response }); } catch { /* Navigation may cancel the old dashboard. */ }
   });
@@ -115,10 +120,10 @@ test('authorized module discovery starts before a slow dashboard and independent
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   try {
     await expect(page.locator('#navigation a[href="#car-rentals"]')).toHaveCount(1);
-    await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toHaveCount(0);
+    await expect(page.locator('#daily-dashboard')).toHaveAttribute('aria-busy', 'true');
     await expect(page.locator('#navigation a[href="#company"]')).toHaveCount(0);
   } finally { release(); }
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
 });
 
 test('a transient module failure offers Retry and only a successful authorized contract activates the destination', async ({ page }) => {
@@ -165,10 +170,10 @@ test('read deadlines cancel a stalled fetch while preserving a separate route-ab
   } finally { release(); }
 });
 
-test('a delayed dashboard rental read does not block the independent expense request', async ({ page }) => {
+test('a stalled aggregate overview does not block navigating to the independent expense workflow', async ({ page }) => {
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
-  await page.route('**/api/hamdee/v1/rental?*', async route => {
+  await page.route('**/api/hamdee/v1/operations-dashboard?*', async route => {
     const response = await route.fetch(); await held;
     try { await route.fulfill({ response }); } catch { /* The test may close an aborted read. */ }
   });
@@ -177,9 +182,12 @@ test('a delayed dashboard rental read does not block the independent expense req
   await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
   const expense = page.waitForRequest(request => new URL(request.url()).pathname === '/api/hamdee/v1/expenses', { timeout: 10_000 });
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  try { await expense; } finally { release(); }
+  try {
+    await expect(page.locator('#daily-dashboard')).toHaveAttribute('aria-busy', 'true');
+    await nav(page, 'Expenses'); await expense;
+  } finally { release(); }
   await expect(page.locator('#main')).toHaveAttribute('aria-busy', 'false');
-  await expect(page.getByRole('heading', { name: 'Income versus expenses', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Property expenses', exact: true, level: 1 })).toBeVisible();
 });
 
 test('owner views avoid redundant rental and villa property-register reads without caching private records', async ({ page }) => {
@@ -187,11 +195,15 @@ test('owner views avoid redundant rental and villa property-register reads witho
   const reads: string[] = [];
   page.on('request', request => { if (request.method() === 'GET') reads.push(new URL(request.url()).pathname); });
   await login(page);
-  expect(reads.filter(path => path === '/api/hamdee/v1/rental')).toHaveLength(1);
-  await expect(page.locator('#rental-dashboard')).toContainText('Confirm imported occupancy.');
-  await expect(page.locator('#expense-dashboard')).toHaveAttribute('aria-busy', 'false');
+  expect(reads.filter(path => path === '/api/hamdee/v1/rental')).toHaveLength(0);
+  expect(reads.filter(path => path === '/api/hamdee/v1/operations-dashboard')).toHaveLength(1);
+  await expect(page.locator('#daily-dashboard')).toHaveAttribute('aria-busy', 'false');
   const propertyReads = () => reads.filter(path => path === '/api/hamdee/v1/properties').length;
+  expect(propertyReads()).toBe(0);
+  await nav(page, 'Villas & Properties');
+  await expect(page.getByRole('button', { name: source.property.name, exact: true })).toBeVisible();
   const before = propertyReads();
+  expect(before).toBe(1);
   await page.getByRole('button', { name: source.property.name, exact: true }).click();
   await page.getByRole('button', { name: 'Rooms & rentals', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Rooms and occupancy', exact: true })).toContainText(source.room.code);

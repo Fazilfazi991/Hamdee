@@ -35,6 +35,7 @@ async function renderRental(data=records()){
 }
 function dashboard(){return{
  month:'2026-11',asOf:'2026-11-03',moneyUnit:'decimal-major-unit-strings',
+ overviewVersion:1,overview:{basis:{totalCollected:'Allocated to issued rent dues',trendCollections:'Original cash/bank rent and car receipts',expenses:'Recorded property & vehicle costs',balances:'Verified company accounts only'},currencies:[{currency:'QAR',totalCollected:'450.00',pendingCollection:'550.00',companyCash:null,companyBank:null,monthlyExpenses:'200.00',rent:{expected:'1000.00',allocated:'450.00',outstanding:'550.00',unappliedAdvances:'100.00',depositHeld:'500.00',pendingCheques:'0.00'},operations:{carCollected:null,staffHeld:'100.00',pendingCheques:'0.00',pendingRentCheques:'0.00',pendingCarCheques:'0.00',upcomingAmount:'550.00',upcomingCount:1,nextDueDate:'2026-11-05'},trend:[],trendReady:false}]},
  accounts:{companySetupRequired:true,personalSetupRequired:false,company:[],personal:[{id:'demo-personal',name:'PERSONAL-SECRET-REFERENCE',kind:'bank',currency:'INR',balance:'987654.32'}]},
  balances:[{currency:'QAR',companyCash:null,companyBank:null,staffHeld:'100.00'}],personalBalances:[{currency:'INR',personalCash:'987654.32',personalBank:'987654.32'}],
  rent:[{currency:'QAR',expected:'1000.00',allocated:'450.00',outstanding:'550.00',unappliedAdvances:'100.00',depositHeld:'500.00',pendingCheques:'0.00'}],
@@ -76,22 +77,23 @@ test('An unknown advance availability is visibly unverified and cannot manufactu
  const {target}=await renderRental(data);const source=target.innerHTML.split('aria-label="Cross-month advances"')[1].split('</table>')[0];
  assert.match(source,/Not verified/);assert.doesNotMatch(source,/data-rental-action="allocate-advance"/);
 });
-test('Dashboard shows authoritative company accounts, staff custody, rent/expense figures and source links without personal balances',()=>{
+test('Dashboard shows compact authoritative figures and module links without personal or detailed-record disclosure',()=>{
  const data=dashboard(),before=JSON.stringify(data),html=daily.dailyDashboardMarkup(data);
- assert.match(html,/Not verified/);assert.match(html,/Set up company accounts/);assert.match(html,/no opening balance is assumed/);
- assert.match(html,/QAR 550\.00/);assert.match(html,/QAR 100\.00/);assert.match(html,/Deposits held/);assert.match(html,/href="#properties\/demo-property\/collections"/);
+ assert.match(html,/Not verified/);assert.match(html,/href="#company"/);
+ assert.match(html,/550\.00/);assert.match(html,/100\.00/);assert.match(html,/Deposits held/);assert.match(html,/href="#collections"/);
  assert.doesNotMatch(html,/PERSONAL-SECRET-REFERENCE|987654\.32|Personal cash|Personal bank|Distributable profit/);
- assert.match(html,/DEMO collector &lt;img src=x&gt;/);assert.equal(JSON.stringify(data),before);
+ assert.doesNotMatch(html,/<table|DEMO collector|DEMO villa|demo-property|img src=x/);assert.equal(JSON.stringify(data),before);
 });
-test('Dashboard formats decimal strings exactly, keeps QAR/INR rows separate and never computes combined balances',()=>{
+test('Dashboard formats decimal strings exactly and currency selection never combines company balances',()=>{
  const data=dashboard();data.accounts.companySetupRequired=false;data.accounts.company.push({id:'demo-account',name:'DEMO cash',kind:'cash',currency:'INR',balance:'1234.123456789'} as never);
  data.balances.push({currency:'INR',companyCash:'1234.123456789',companyBank:null,staffHeld:'0.00'} as never);
- const html=daily.dailyDashboardMarkup(data);assert.match(html,/INR 1234\.123456789/);assert.match(html,/QAR 100\.00/);assert.doesNotMatch(html,/1334\.12|Combined balance/);
+ data.overview.currencies.push({...data.overview.currencies[0],currency:'INR',companyCash:'1234.123456789'} as never);
+ const html=daily.dailyDashboardMarkup(data,'INR');assert.match(html,/1,234\.123456789/);assert.doesNotMatch(html,/1334\.12|Combined balance|QAR<\/span>/);
 });
 test('Dashboard requests the chosen month/cutoff, re-verifies owner access and clears data after route abort',async()=>{
  const target=new Target(),route=new AbortController(),calls:unknown[]=[];let verified=0;
  await daily.renderDailyDashboard(target,{api:{operationsDashboard:async(filters:unknown)=>{calls.push(filters);return{data:dashboard()};}},month:'2026-11',asOf:'2026-11-03',signal:route.signal,isCurrent:()=>true,verifyAccess:async()=>{verified++;return true;},onAccessLoss:async()=>assert.fail('Unexpected loss')});
- assert.deepEqual(calls,[{month:'2026-11',asOf:'2026-11-03'}]);assert.equal(verified,1);assert.match(target.innerHTML,/DEMO villa/);route.abort();assert.equal(target.innerHTML,'');
+ assert.deepEqual(calls,[{month:'2026-11',asOf:'2026-11-03'}]);assert.equal(verified,1);assert.match(target.innerHTML,/Business Overview/);route.abort();assert.equal(target.innerHTML,'');
 });
 test('Dashboard denies stale/cross-period responses and owner access errors without retaining private figures',async()=>{
  for(const denied of [false,true]){

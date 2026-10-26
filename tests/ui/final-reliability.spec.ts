@@ -4,7 +4,7 @@ let server:Awaited<ReturnType<typeof startOwnerBrowserHarness>>;
 test.setTimeout(90_000);
 test.beforeEach(async()=>{server=await startOwnerBrowserHarness({migrationFiles:['006_local_operations_records.up.sql','007_local_car_rentals.up.sql','008_local_partner_records.up.sql']});});
 test.afterEach(async()=>{await server.close();});
-async function login(page:Page){await page.goto(server.url+'/workspace/index.html');await page.getByLabel('Email',{exact:true}).fill(server.fixture.inputs.email);await page.getByLabel('Password',{exact:true}).fill(server.fixture.inputs.password);await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('heading',{name:'Property overview',exact:true})).toBeVisible();}
+async function login(page:Page){await page.goto(server.url+'/workspace/index.html');await page.getByLabel('Email',{exact:true}).fill(server.fixture.inputs.email);await page.getByLabel('Password',{exact:true}).fill(server.fixture.inputs.password);await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.getByRole('heading',{name:'Business Overview',exact:true})).toBeVisible();}
 test('transient operational read errors offer explicit local retry without logging out or replaying writes',async({page})=>{
   await login(page);
   for(const [route,path,heading] of [['company','company-finance','Company Finance accounts'],['personal-finance','personal-finance','Personal Finance accounts'],['car-rentals','car-rentals','Vehicles & availability']]){

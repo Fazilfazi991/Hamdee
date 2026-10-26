@@ -13,7 +13,7 @@ async function login(page: Page) {
   await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email);
   await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
 }
 async function nav(page: Page, name: string) {
   const menu = page.getByRole('button', { name: 'Open navigation', exact: true }); if (await menu.isVisible()) await menu.click();
@@ -33,7 +33,7 @@ async function create(page: Page, name: string) {
 test('Password browser QA: password opens saved dashboard immediately, reload stays signed in, no MFA requests', async ({ page }, info) => {
   const mfaRequests: string[] = []; page.on('request', r => { if (/\/auth\/mfa\//.test(r.url())) mfaRequests.push(r.url()); });
   await login(page); await noMfa(page); await page.reload();
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible(); await noMfa(page);
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible(); await noMfa(page);
   expect(mfaRequests).toEqual([]);
   const cookies = await page.context().cookies(); expect(cookies.some(c => c.name === 'hamdee_owner' && c.httpOnly && c.sameSite === 'Strict')).toBeTruthy();
   const storage = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }));
@@ -51,8 +51,8 @@ test('Password browser QA: anonymous direct API and invalid password reveal no p
   await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email);
   await page.getByLabel('Password', { exact: true }).fill('SYNTHETIC_WRONG_PASSWORD');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.locator('#access-error')).toContainText(/sign in|authorized|credentials|password/i);
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toHaveCount(0);
+  await expect(page.locator('#login-error')).toContainText(/sign in|authorized|credentials|password/i);
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Email', { exact: true })).toHaveValue(server.fixture.inputs.email); await noMfa(page);
   await page.screenshot({ path: `evidence/password-qa/screenshots/${info.project.name}-invalid-password.png`, fullPage: true });
 });
@@ -61,8 +61,8 @@ test('Password browser QA: nonowner provider UUID is rejected despite valid synt
   server.fixture.fake.facts.subject = OTHER_QA_SUBJECT;
   await page.goto(server.url + '/workspace/index.html');
   await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email); await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click(); await expect(page.locator('#access-error')).not.toBeEmpty();
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click(); await expect(page.locator('#login-error')).not.toBeEmpty();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toHaveCount(0);
   expect((await page.request.get(server.url + '/api/hamdee/v1/properties')).status()).toBe(401); await noMfa(page);
 });
 

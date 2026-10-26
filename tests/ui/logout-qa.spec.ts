@@ -13,7 +13,7 @@ async function login(page: Page) {
   await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email);
   await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   // Drain dashboard reads before advancing the test clock; a response arriving
   // afterwards legitimately renews the browser CSRF proof.
   await expect(page.getByRole('region', { name: 'Expenses by category', exact: true })).toBeVisible();
@@ -50,7 +50,7 @@ test('Independent logout browser: expired CSRF reports unconfirmed, authenticate
   await expect(page.getByRole('heading', { name: 'Unable to confirm sign-out', exact: true })).toBeVisible();
   expect(server.fixture.fake.facts.calls.signOut).toBe(0);
   await page.getByRole('button', { name: 'Retry connection', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await denied(page);
   expect(server.fixture.fake.facts.calls.signOut).toBe(1);
   await page.screenshot({ path: `evidence/car-finance-qa/screenshots/${info.project.name}-logout-renewed.png`, fullPage: true });
