@@ -7,6 +7,7 @@ import { securityLogger,logSafely,type SecurityLogger } from './security-log';
 import { RentalService } from './rental';
 import { ExpenseService } from './expenses';
 import { PartnerService } from './partners';
+import { DailyDashboardService } from './daily-dashboard';
 const base='/api/hamdee/v1';
 /** Trusted server compositions only. Each module keeps its financial validation,
  * transaction, audit and command replay inside the existing owner context. */
@@ -40,9 +41,18 @@ export function createHandler(provider:IdentityProvider,service:PropertyService,
       // Also validate enabled membership before parsing untrusted mutation fields.
       // For operational modules, the full owner portfolio grant is checked in
       // this same transaction; it is never inferred from a role name alone.
-      const session=await service.session(identity,Object.hasOwn(modules,moduleName)||moduleName==='partners');
+      const session=await service.session(identity,Object.hasOwn(modules,moduleName)||moduleName==='partners'||moduleName==='operations-dashboard');
       requireThat(url.pathname===base||url.pathname.startsWith(base+'/'),404,'NOT_FOUND','Endpoint not found.');
       if(path==='/session'&&request.method==='GET') return json({data:{...session,authenticationProvider:provider.kind||'server-validated'}});
+      if(moduleName==='operations-dashboard'){
+        requireThat(path==='/operations-dashboard',404,'NOT_FOUND','Endpoint not found.');
+        requireThat(request.method==='GET',405,'METHOD_NOT_ALLOWED','The daily operations dashboard is read-only.');
+        requireThat([...url.searchParams.keys()].every(key=>['month','asOf'].includes(key)&&url.searchParams.getAll(key).length===1),400,'INVALID_QUERY','Choose valid daily dashboard dates.');
+        const period=url.searchParams.get('month')??'',asOf=url.searchParams.get('asOf')??'';
+        requireThat(/^(19|[2-9]\d)\d{2}-(0[1-9]|1[0-2])$/.test(period)&&/^(19|[2-9]\d)\d{2}-\d{2}-\d{2}$/.test(asOf)&&
+          Number.isFinite(Date.parse(asOf))&&new Date(asOf).toISOString().slice(0,10)===asOf,400,'INVALID_QUERY','Choose valid daily dashboard dates.');
+        return json({data:await new DailyDashboardService(service).overview(identity,{month:period,asOf})});
+      }
       if(moduleName==='partners'){
         const partners=new PartnerService(service),isCommand=path==='/partners/commands';
         requireThat(path==='/partners'||isCommand,404,'NOT_FOUND','Endpoint not found.');

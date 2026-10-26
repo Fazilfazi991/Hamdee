@@ -1,5 +1,6 @@
 import { PropertyApi } from './adapter.js';
-import { renderRental,renderRentalDashboard,resetRental,rentalReportPeriod,isIsolatedDemoContext } from './rental.js';
+import { renderRental,resetRental,rentalReportPeriod,isIsolatedDemoContext } from './rental.js';
+import { renderDailyDashboard,resetDailyDashboard } from './daily-dashboard.js';
 import { renderExpenses,resetExpenses,expenseReportPeriod } from './expenses.js';
 const api=new PropertyApi(),$=s=>document.querySelector(s),icon=window.icon;
 const isolatedDemo=isIsolatedDemoContext(window.location.hostname,$('meta[name="hamdee-demo"]')?.content);
@@ -12,7 +13,7 @@ let staffWorkspace=null,staffReady=false,capabilityController=null;
 let carReady=false,companyReady=false,personalReady=false,carWorkspace=null,companyWorkspace=null,personalWorkspace=null;
 let partnerReady=false,partnerWorkspace=null;
 let moduleStates={};
-function resetOwnerOperations(){carWorkspace?.resetCarRentals();companyWorkspace?.resetCompanyFinance();personalWorkspace?.resetPersonalFinance();partnerWorkspace?.resetPartners();}
+function resetOwnerOperations(){resetDailyDashboard();carWorkspace?.resetCarRentals();companyWorkspace?.resetCompanyFinance();personalWorkspace?.resetPersonalFinance();partnerWorkspace?.resetPartners();}
 // Retain HAMDEE's paper panels, brass actions, Inter and compact 4px rhythm.
 // Owner access has one primary action; property metadata keeps its existing hierarchy.
 const can=action=>session?.capabilities.includes(action);
@@ -46,6 +47,7 @@ function rememberAccess(data){
   return access;
 }
 function renderAccess(message=''){
+  if(!session){$('#main').innerHTML='<div class="empty" role="status">Opening secure owner sign in…</div>';window.location.replace('/login');return;}
   navigation();$('#main').setAttribute('aria-busy','false');$('#user-context').textContent='Not signed in';
   const phase=access?.state||'anonymous';let body,title='Sign-in required',subtitle='Owner access to your property workspace.';
   if(phase==='recovery_pending'){
@@ -226,18 +228,12 @@ async function render(){
       main.innerHTML=heading('Property overview','Your saved properties, rentals and operating costs.',can('create')?btn('Add property','create','primary'):'')+
         `<div class="metrics owner-metadata-metrics">${[['Total properties',d.totalProperties,'All saved records'],['Active properties',d.activeProperties,'Registered metadata records'],['Archived properties',d.archivedProperties,'History preserved']].map(([label,value,note])=>`<div class="metric"><div class="metric-top"><span>${label}</span>${icon('properties')}</div><div class="metric-value">${e(value)}</div><p class="metric-note">${note}</p></div>`).join('')}</div>`+
         `<section class="panel"><div class="panel-header"><div><h2>Recently updated properties</h2><p>Up to ten saved records · Newest updates first</p></div>${btn('View properties','back')}</div>${d.recentProperties.length?table(d.recentProperties):'<div class="empty"><h2>No properties yet</h2><p>Add your first property to begin your register.</p></div>'}</section>`+
-        `<p class="muted-help">Collections and recorded costs appear below. Account movements remain in Company Finance and Personal Finance; no distributable profit is inferred.</p>`;
-      const rentalTarget=document.createElement('div');rentalTarget.id='rental-dashboard';main.append(rentalTarget);
-      const expenseTarget=document.createElement('div');expenseTarget.id='expense-dashboard';main.append(expenseTarget);
-      for(const target of [rentalTarget,expenseTarget])target.setAttribute('aria-busy','true');
+        `<p class="muted-help">Choose a collection month to view confirmed rent dues, saved receipts and company funds. Personal finances stay separate.</p>`;
+      const dailyTarget=document.createElement('div');dailyTarget.id='daily-dashboard';main.append(dailyTarget);
       // Property counts and recent villas are usable now; slower panels keep
       // their own loading status without holding the entire workspace busy.
       main.setAttribute('aria-busy','false');
-      const expenseOptions={api,summaryOnly:true,followRentalPeriod:true,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss};
-      await Promise.all([
-        renderRentalDashboard(rentalTarget,{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss,onReportChange:period=>renderExpenses(expenseTarget,{...expenseOptions,period})}).finally(()=>{if(validRead(seq,controller))rentalTarget.setAttribute('aria-busy','false');}),
-        renderExpenses(expenseTarget,{...expenseOptions,period:rentalReportPeriod()}).finally(()=>{if(validRead(seq,controller))expenseTarget.setAttribute('aria-busy','false');})
-      ]);
+      await renderDailyDashboard(dailyTarget,{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
     }else if(['expenses','maintenance','reports'].includes(route)&&managed){
       current=null;page=null;main.innerHTML=heading(route==='reports'?'Monthly property report':route==='maintenance'?'Property maintenance':'Property expenses','Private owner records · Saved property costs and payments.')+'<div id="expense-workspace"></div>';
       await renderExpenses($('#expense-workspace'),{api,summaryOnly:route==='reports',signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
@@ -335,4 +331,6 @@ document.addEventListener('keydown',event=>{
   if(event.key==='Tab'){const controls=[...$('#sidebar').querySelectorAll('a,button')].filter(el=>!el.disabled&&el.getClientRects().length),first=controls[0],last=controls.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}
 });
 window.addEventListener('hashchange',async()=>{closeNavigation();if(!authController||authController.signal.aborted){await render();if(session&&!document.querySelector('dialog[open]'))$('#main').focus();}});
+window.addEventListener('pagehide',()=>{clearProtected();$('#main').innerHTML='<div class="empty" role="status">Checking secure access…</div>';});
+window.addEventListener('pageshow',event=>{if(event.persisted){clearProtected();$('#main').innerHTML='<div class="empty" role="status">Checking secure access…</div>';void boot();}});
 void boot();

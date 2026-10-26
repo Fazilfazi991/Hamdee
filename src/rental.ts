@@ -38,6 +38,7 @@ export class RentalService {
         LEFT JOIN hamdee_private.rent_allocations a ON a.due_id=d.id AND a.allocated_date<=$3::date WHERE ($1::uuid IS NULL OR d.property_id=$1) AND d.period=$2
         GROUP BY d.id ORDER BY d.due_date,d.id`,[propertyId,period,asOf])).rows;
       const allocations=(await sql.query<Row>(`SELECT a.* FROM hamdee_private.rent_allocations a JOIN hamdee_private.rent_collections c ON c.id=a.collection_id WHERE ($1::uuid IS NULL OR c.property_id=$1) ORDER BY a.id`,[propertyId])).rows;
+      const availableAdvance=(collection:Row)=>BigInt(String(collection.amount_minor))-allocations.filter(a=>a.collection_id===collection.id&&day(a.allocated_date)<=asOf).reduce((sum,a)=>sum+BigInt(String(a.amount_minor)),0n);
       const summaries=new Map<string,Record<string,bigint>>();
       const group=(currency:string)=>{if(!summaries.has(currency))summaries.set(currency,{dueMinor:0n,collectedMinor:0n,outstandingMinor:0n,advanceMinor:0n,depositMinor:0n,chequePendingMinor:0n});return summaries.get(currency)!;};
       for(const due of dues){const g=group(String(due.currency));g.dueMinor+=BigInt(String(due.amount_minor));g.collectedMinor+=BigInt(String(due.paid_minor));g.outstandingMinor+=BigInt(String(due.outstanding_minor));}
@@ -45,12 +46,12 @@ export class RentalService {
       // Deposit/credit balances are separately labelled as-of balances.
       for(const c of collections){if(day(c.received_date)>asOf)continue;const g=group(String(c.currency)),amount=BigInt(String(c.amount_minor));
         if(c.status==='pending'){if(day(c.received_date).slice(0,7)===period)g.chequePendingMinor+=amount;continue;}
-        if(c.kind==='advance'){g.advanceMinor+=amount-allocations.filter(a=>a.collection_id===c.id&&day(a.allocated_date)<=asOf).reduce((s,a)=>s+BigInt(String(a.amount_minor)),0n);}
+        if(c.kind==='advance'){g.advanceMinor+=availableAdvance(c);}
         if(c.kind==='deposit')g.depositMinor+=amount;if(c.kind==='deposit_refund')g.depositMinor-=amount;
       }
       const roomViews=rooms.map(room=>({...view(room),occupancy:agreements.some(a=>a.room_id===room.id&&day(a.start_date)<=asOf&&(!a.end_date||day(a.end_date)>=asOf))?'occupied':'unknown',
         historicalOccupants:historical.get(String(room.id))?.historicalOccupants??[],historicalOccupancyReviewRequired:historical.get(String(room.id))?.historicalOccupancyReviewRequired??false}));
-      return {rooms:roomViews,tenants:tenants.map(view),agreements:agreements.map(view),dues:dues.map(d=>({...view(d),status:BigInt(String(d.outstanding_minor))===0n?'paid':BigInt(String(d.paid_minor))>0n?'partial':'pending'})),collections:collections.map(view),allocations:allocations.map(view),history:history.map(view),
+      return {rooms:roomViews,tenants:tenants.map(view),agreements:agreements.map(view),dues:dues.map(d=>({...view(d),status:BigInt(String(d.outstanding_minor))===0n?'paid':BigInt(String(d.paid_minor))>0n?'partial':'pending'})),collections:collections.map(c=>({...view(c),...(c.kind==='advance'&&c.status==='recorded'&&day(c.received_date)<=asOf?{availableAdvanceMinor:String(availableAdvance(c))}:{})})),allocations:allocations.map(view),history:history.map(view),
         summary:{totalRooms:rooms.length,occupiedRooms:roomViews.filter(r=>r.occupancy==='occupied').length,vacantRooms:0,unverifiedRooms:roomViews.filter(r=>r.occupancy==='unknown').length,currencies:[...summaries].map(([currency,values])=>({currency,...Object.fromEntries(Object.entries(values).map(([k,v])=>[k,String(v)]))}))}};
     });
   }

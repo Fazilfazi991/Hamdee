@@ -16,6 +16,7 @@ import type { Database } from '../../src/database';
 import { createOwnerApplication, type OwnerApplication,type OwnerApplicationOptions } from '../../src/owner-runtime';
 import type { OwnerAuthAuditEvent, OwnerAuthOptions, OwnerManagedProvider, OwnerProviderSession, OwnerTokenPair } from '../../src/owner-auth';
 import { adapter, up } from './fixture';
+import { ownerPageAccess } from '../../src/owner-page-access';
 
 export const OWNER_QA_TIME = 2_000_000;
 export const OWNER_QA_SUBJECT = '44440000-1111-4111-8111-111111111111';
@@ -206,7 +207,8 @@ export async function startOwnerNativeCluster(runtime: { bin: string; archiveSha
 }
 
 const assetPaths = new Set(['workspace/index.html', 'workspace/adapter.js', 'workspace/app.js', 'workspace/rental.js', 'workspace/expenses.js', 'workspace/foundation.css',
-  'workspace/staff-collections.js','workspace/company-finance.js','workspace/car-rentals.js','workspace/personal-finance.js','workspace/partners.js',
+  'workspace/staff-collections.js','workspace/company-finance.js','workspace/car-rentals.js','workspace/personal-finance.js','workspace/partners.js','workspace/daily-dashboard.js',
+  'login.html','login.js','login.css',
   'shared/styles.css', 'shared/icons.js', 'shared/hamdee-logo.png', 'shared/inter-latin.woff2']);
 export type OwnerQaHttpHandler = (request: Request) => Promise<Response>;
 
@@ -231,7 +233,20 @@ export async function startOwnerLoopbackHarness(assetRoot: string,
         const cookies = response.headers.getSetCookie(); if (cookies.length) outgoing['set-cookie'] = cookies;
         res.writeHead(response.status, outgoing); res.end(await response.text()); return;
       }
-      const file = pathname.slice(1); if (!assetPaths.has(file)) { res.writeHead(404).end(); return; }
+      let file = pathname.slice(1);
+      if(['/','/login','/login.html','/workspace','/workspace/','/workspace/index.html'].includes(pathname)){
+        if(!handler){res.writeHead(503).end('QA application unavailable');return;}
+        const headers=new Headers();for(const[name,value]of Object.entries(req.headers))if(value!==undefined)headers.set(name,Array.isArray(value)?value.join(', '):value);
+        const decision=await ownerPageAccess(new Request(origin+req.url,{method:req.method,headers}),handler);
+        for(const[name,value]of decision.headers)if(name!=='set-cookie')res.setHeader(name,value);
+        const cookies=decision.headers.getSetCookie();if(cookies.length)res.setHeader('set-cookie',cookies);
+        if(decision.kind==='redirect-login'||decision.kind==='redirect-workspace'){
+          res.writeHead(303,{Location:decision.kind==='redirect-login'?'/login':'/workspace/index.html#dashboard'}).end();return;
+        }
+        if(decision.kind==='unavailable'||decision.kind==='method-not-allowed'){res.writeHead(decision.kind==='unavailable'?503:405).end('Owner access unavailable');return;}
+        if(decision.kind==='login')file='login.html';else file='workspace/index.html';
+      }
+      if (!assetPaths.has(file)) { res.writeHead(404).end(); return; }
       const mime = file.endsWith('.html') ? 'text/html' : file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.png') ? 'image/png' : 'font/woff2';
       res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'no-store' }); res.end(await readFile(path.join(root, file)));
     } catch { res.writeHead(500).end('Synthetic owner QA harness failure'); }
