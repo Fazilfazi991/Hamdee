@@ -80,6 +80,9 @@ export class DailyDashboardService {
       ), upcoming_totals AS (
         SELECT currency,sum((amount_minor-paid_minor)/100.0) AS amount,count(*)::int AS count,min(due_date) AS next_date
         FROM due_values WHERE due_date>=$2::date AND amount_minor>paid_minor GROUP BY currency
+      ), overdue_totals AS (
+        SELECT currency,sum((amount_minor-paid_minor)/100.0) AS amount,count(*)::int AS count,min(due_date) AS oldest_date
+        FROM due_values WHERE due_date<$2::date AND amount_minor>paid_minor GROUP BY currency
       ), trend_events AS (
         SELECT currency,received_date AS business_date,amount_minor/100.0 AS amount,'collection' AS kind
         FROM receipt_values WHERE kind='rent' AND status='recorded' AND method IN ('cash','bank')
@@ -119,13 +122,15 @@ export class DailyDashboardService {
             'pendingCheques',trim_scale(coalesce(rp.amount,0)+coalesce(c.pending,0))::text,
             'pendingRentCheques',trim_scale(coalesce(rp.amount,0))::text,'pendingCarCheques',trim_scale(coalesce(c.pending,0))::text,
             'upcomingAmount',CASE WHEN r.currency IS NOT NULL THEN trim_scale(coalesce(u.amount,0))::text END,
-            'upcomingCount',coalesce(u.count,0),'nextDueDate',u.next_date),
+            'upcomingCount',coalesce(u.count,0),'nextDueDate',u.next_date,
+            'overdueAmount',CASE WHEN r.currency IS NOT NULL THEN trim_scale(coalesce(o.amount,0))::text END,
+            'overdueCount',coalesce(o.count,0),'oldestOverdueDate',o.oldest_date),
           'trend',coalesce((SELECT jsonb_agg(jsonb_build_object('month',t.month,'collections',trim_scale(t.collections)::text,'expenses',trim_scale(t.expenses)::text) ORDER BY t.month)
             FROM trend_values t WHERE t.currency=k.currency),'[]'::jsonb),
           'trendReady',(SELECT count(*)>=2 FROM trend_values t WHERE t.currency=k.currency)
         ) ORDER BY k.currency) FROM business_currencies k LEFT JOIN rent_totals r USING(currency) LEFT JOIN receipt_totals rc USING(currency)
           LEFT JOIN monthly_car c USING(currency) LEFT JOIN monthly_costs e USING(currency) LEFT JOIN rental_pending rp USING(currency)
-          LEFT JOIN upcoming_totals u USING(currency)),'[]'::jsonb)),
+          LEFT JOIN upcoming_totals u USING(currency) LEFT JOIN overdue_totals o USING(currency)),'[]'::jsonb)),
         'accounts',jsonb_build_object(
           'companySetupRequired',NOT EXISTS(SELECT 1 FROM account_values WHERE scope='company' AND opening_date<=$2::date),
           'personalSetupRequired',NOT EXISTS(SELECT 1 FROM account_values WHERE scope='personal' AND opening_date<=$2::date),
