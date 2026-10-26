@@ -47,7 +47,13 @@ function rememberAccess(data){
   return access;
 }
 function renderAccess(message=''){
-  if(!session){$('#main').innerHTML='<div class="empty" role="status">Opening secure owner sign in…</div>';window.location.replace('/login');return;}
+  if(!session){
+    // The retained legacy API has no managed /login endpoint. Its explicit
+    // unavailable-auth branch shows denial only; managed owner pages still
+    // leave the workspace for the standalone login without private content.
+    if(managed===false){showUnavailable('Sign-in required',message||'A valid authorized session is required.');return;}
+    $('#main').innerHTML='<div class="empty" role="status">Opening secure owner sign in…</div>';window.location.replace('/login');return;
+  }
   navigation();$('#main').setAttribute('aria-busy','false');$('#user-context').textContent='Not signed in';
   const phase=access?.state||'anonymous';let body,title='Sign-in required',subtitle='Owner access to your property workspace.';
   if(phase==='recovery_pending'){

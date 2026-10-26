@@ -9,9 +9,9 @@ test.beforeEach(async () => { server = await startOwnerBrowserHarness(); await m
 test.afterEach(async () => { await server?.close(); });
 async function login(page: Page) {
   await page.goto(server.url + '/workspace/index.html#dashboard');
-  await expect(page.getByLabel(/email/i)).toBeVisible();
-  await page.getByLabel(/email/i).fill(server.fixture.inputs.email);
-  await page.getByLabel(/password/i).fill(server.fixture.inputs.password);
+  await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
+  await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email);
+  await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: /sign in|log in/i }).click();
   await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   await expect(page.locator('#owner-mfa, #enrollment-qr')).toHaveCount(0);
@@ -57,12 +57,12 @@ test('owner UI: password login, keyboard property CRUD/archive/restore/audit and
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy(); expect(errors).toEqual([]);
 });
 test('owner UI: invalid password shows accessible error, clears password and never protected property data', async ({ page }) => {
-  await page.goto(server.url + '/workspace/index.html'); await page.getByLabel(/email/i).fill(server.fixture.inputs.email);
-  await page.getByLabel(/password/i).fill('SYNTHETIC_WRONG_PASSWORD'); await page.getByRole('button', { name: /sign in|log in/i }).click();
+  await page.goto(server.url + '/workspace/index.html'); await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email);
+  await page.getByLabel('Password', { exact: true }).fill('SYNTHETIC_WRONG_PASSWORD'); await page.getByRole('button', { name: /sign in|log in/i }).click();
   await expect(page.getByRole('alert').first()).toBeVisible(); await expect(page.getByRole('button', { name: 'Add property', exact: true })).toHaveCount(0);
-  await expect(page.getByLabel(/password/i)).toHaveValue('');
+  await expect(page.getByLabel('Password', { exact: true })).toHaveValue('');
   await expect(page.getByRole('alert').first()).toBeFocused();
-  await page.getByLabel(/password/i).fill(server.fixture.inputs.password);
+  await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: /sign in|log in/i }).click();
   await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   await expect(page.locator('#owner-mfa, #enrollment-qr')).toHaveCount(0);
@@ -141,7 +141,7 @@ test('owner UI: logout in another tab wins over delayed reply and preserves demo
   await expect(second.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   await second.getByRole('button', { name: /sign out|log out/i }).click();
   await page.evaluate(() => { window.location.hash = 'dashboard'; });
-  await expect(page.getByLabel(/email/i)).toBeVisible(); release();
+  await expect(page.getByLabel('Email', { exact: true })).toBeVisible(); release();
   await expect(page.getByRole('heading', { name: 'Synthetic delayed owner save', exact: true })).toHaveCount(0);
   await second.close();
   expect(await page.evaluate(() => localStorage.getItem('hamdee-investment-demo-v1'))).toBe(sentinel);
@@ -160,7 +160,7 @@ test('owner UI: owner session survives reload, and logout removes protected cont
   await login(page); await create(page, 'Synthetic reopened owner property');
   await page.reload(); await expect(page.getByRole('heading', { name: 'Synthetic reopened owner property', exact: true })).toBeVisible();
   await page.getByRole('button', { name: /sign out|log out/i }).click();
-  await expect(page.getByLabel(/email/i)).toBeVisible();
+  await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Synthetic reopened owner property', exact: true })).toHaveCount(0);
   await expect(page.locator('#owner-mfa, #enrollment-qr')).toHaveCount(0);
   await page.screenshot({ path: `evidence/owner-crm/${info.project.name}-owner-login.png`, fullPage: true });
@@ -168,7 +168,7 @@ test('owner UI: owner session survives reload, and logout removes protected cont
 test('owner UI: returning owner signs in directly with password and retains saved properties', async ({ page }) => {
   await login(page); await create(page, 'Synthetic returning owner property');
   await page.getByRole('button', { name: /sign out|log out/i }).click();
-  await page.getByLabel(/email/i).fill(server.fixture.inputs.email); await page.getByLabel(/password/i).fill(server.fixture.inputs.password);
+  await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email); await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: /sign in|log in/i }).click();
   await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   await expect(page.getByText('Synthetic returning owner property', { exact: true })).toHaveCount(0);

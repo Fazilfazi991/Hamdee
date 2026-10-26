@@ -14,8 +14,8 @@ test.afterEach(async () => { await server?.close(); });
 
 async function login(page: Page) {
   await page.goto(server.url + '/workspace/index.html#dashboard');
-  await page.getByLabel(/email/i).fill(server.fixture.inputs.email);
-  await page.getByLabel(/password/i).fill(server.fixture.inputs.password);
+  await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email);
+  await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: /sign in/i }).click();
   await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   const menu = page.getByRole('button', { name: 'Open navigation', exact: true });
@@ -42,6 +42,10 @@ async function pendingRefresh(page: Page) {
     headers: { Origin: server.url, 'X-Hamdee-CSRF': csrf }, data: {}
   });
   await gate.entered.promise;
+  // Hold only this already-entered refresh. A separate logout CSRF preflight
+  // must remain live; blocking every provider read would deadlock the test
+  // instead of exercising a late refresh response after revocation.
+  server.fixture.fake.facts.verifyGate = null;
   return { pending, release() { server.fixture.fake.facts.verifyGate = null; gate.release.resolve(); } };
 }
 
@@ -51,12 +55,12 @@ test('Logout UI regression: refresh, Back and direct/copy-cookie reads reveal no
   try {
     const response = page.waitForResponse(r => r.url().endsWith('/api/hamdee/auth/logout') && r.request().method() === 'POST');
     await page.getByRole('button', { name: 'Sign out', exact: true }).click(); expect((await response).status()).toBe(200);
-    await expect(page.getByLabel(/email/i)).toBeVisible();
+    await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
     await expect(page.getByText(privateName, { exact: true })).toHaveCount(0);
     await protectedReadsDenied(page);
     expect((await copied.request.get(server.url + '/api/hamdee/v1/dashboard')).status()).toBe(401);
     await page.goBack(); await expect(page.getByText(privateName, { exact: true })).toHaveCount(0);
-    await page.reload(); await expect(page.getByLabel(/email/i)).toBeVisible();
+    await page.reload(); await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
     await expect(page.getByText(privateName, { exact: true })).toHaveCount(0);
     await protectedReadsDenied(page);
   } finally { await copied.close(); }
@@ -67,10 +71,10 @@ test('Logout UI regression: late refresh can deliver a cookie but cannot restore
   try {
     const response = page.waitForResponse(r => r.url().endsWith('/api/hamdee/auth/logout'));
     await page.getByRole('button', { name: 'Sign out', exact: true }).click(); expect((await response).status()).toBe(200);
-    await expect(page.getByLabel(/email/i)).toBeVisible();
+    await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
   } finally { late.release(); }
   expect((await late.pending).status()).toBe(200);
-  await page.reload(); await expect(page.getByLabel(/email/i)).toBeVisible();
+  await page.reload(); await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
   await expect(page.getByText(privateName, { exact: true })).toHaveCount(0);
   await protectedReadsDenied(page);
 });
@@ -92,6 +96,7 @@ test('Logout UI characterization: unconfirmed provider failure plus late cookie 
   server.fixture.fake.facts.unconfirmedLogout = false;
   const response = page.waitForResponse(r => r.url().endsWith('/api/hamdee/auth/logout'));
   await page.getByRole('button', { name: 'Sign out', exact: true }).click(); expect((await response).status()).toBe(200);
-  await page.reload(); await expect(page.getByLabel(/email/i)).toBeVisible();
+  await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
+  await page.reload(); await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
   await protectedReadsDenied(page);
 });
