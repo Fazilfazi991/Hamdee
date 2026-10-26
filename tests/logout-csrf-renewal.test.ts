@@ -78,3 +78,16 @@ test('A late fresh proof after generation change cannot post logout or repopulat
  let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});const f=fixture({gate}),pending=f.logout();
  await Promise.resolve();f.context.authGeneration++;release();await pending;assert.equal(f.facts.posts,0);assert.deepEqual(f.facts.redirects,[]);assert(!f.events.includes('remember final access'));
 });
+
+test('Only explicit legacy unavailable-auth mode retains denial UI; managed or unresolved owner mode redirects to standalone login',()=>{
+ const source=app.slice(app.indexOf("function renderAccess(message=''){"),app.indexOf('function showAccessError('));
+ for(const managed of [false,true,null]){
+  const main={innerHTML:''},redirects:string[]=[],denials:string[]=[];
+  const render=runInNewContext('('+source+')',{session:null,managed,$:()=>main,window:{location:{replace:(url:string)=>redirects.push(url)}},
+   showUnavailable:(title:string)=>denials.push(title)}) as ()=>void;
+  render();
+  if(managed===false){assert.deepEqual(denials,['Sign-in required']);assert.deepEqual(redirects,[]);}
+  else{assert.deepEqual(denials,[]);assert.deepEqual(redirects,['/login']);assert.match(main.innerHTML,/Opening secure owner sign in/);}
+  assert.doesNotMatch(main.innerHTML,/Business Overview|Add property|Saved balance/);
+ }
+});

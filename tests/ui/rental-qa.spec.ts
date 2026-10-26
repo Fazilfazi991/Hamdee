@@ -73,6 +73,11 @@ test('Rental UI QA: full owner room/tenant/agreement/due/partial collection work
   await expect(dues.getByRole('cell', { name: 'partial', exact: true })).toBeVisible();
   await collect(page, 'Rent', 'Bank', '600.00'); await expect(dues.getByRole('cell', { name: 'paid', exact: true })).toBeVisible();
   await page.reload(); await page.getByRole('button', { name: 'Rooms & rentals', exact: true }).click();
+  // Reload restores the approved November entry default. This fixture's issued
+  // due is explicitly October and must be selected to verify saved history.
+  await page.getByLabel('Rent month', { exact: true }).fill('2026-10');
+  await page.getByLabel('Occupancy / balance date', { exact: true }).fill('2026-10-15');
+  await page.getByRole('button', { name: 'Apply rental filters', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Monthly rent dues', exact: true }).getByRole('cell', { name: 'paid', exact: true })).toBeVisible();
   await page.getByRole('region', { name: 'Rooms and occupancy', exact: true }).getByRole('row').filter({ has: page.getByRole('cell', { name: 'QA-R01', exact: true }) }).getByRole('button', { name: 'Room history', exact: true }).click();
   const history = page.locator('#rental-dialog'); await expect(history.getByRole('cell', { name: 'Synthetic Browser Tenant', exact: true })).toBeVisible();
@@ -80,6 +85,14 @@ test('Rental UI QA: full owner room/tenant/agreement/due/partial collection work
   await page.screenshot({ path: `evidence/rental-qa/${info.project.name}-rental-workflow.png`, fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await nav(page, 'Dashboard');
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Monthly rental summary', exact: true })).toHaveCount(0);
+  await nav(page, 'Villas & Properties');
+  await page.getByRole('button', { name: 'Synthetic Rental Browser Villa', exact: true }).click();
+  await page.getByRole('button', { name: 'Rooms & rentals', exact: true }).click();
+  await page.getByLabel('Rent month', { exact: true }).fill('2026-10');
+  await page.getByLabel('Occupancy / balance date', { exact: true }).fill('2026-10-15');
+  await page.getByRole('button', { name: 'Apply rental filters', exact: true }).click();
   const summary = page.getByRole('region', { name: 'Monthly rental summary', exact: true });
   await expect(summary.getByRole('cell', { name: 'QAR 1000.00', exact: true })).toHaveCount(2);
   await expect(summary.getByRole('cell', { name: 'QAR 0.00', exact: true })).toHaveCount(2);

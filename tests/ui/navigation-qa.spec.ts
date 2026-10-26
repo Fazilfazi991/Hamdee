@@ -94,6 +94,25 @@ const sections = [
   { name: /^Maintenance$/i, token: 'Synthetic maintenance issue A' },
   { name: /^(?:Audit\s+)?history$/i, token: 'create' }
 ];
+async function historicalFilters(page: Page) {
+  // These scenarios intentionally inspect the explicit October fixtures. The
+  // accepted client workflow defaults to November and must not be changed.
+  await expect(page.locator('#main')).toHaveAttribute('aria-busy', 'false');
+  const rentalMonth = page.getByLabel('Rent month', { exact: true });
+  if (await rentalMonth.count()) {
+    await rentalMonth.fill('2026-10');
+    await page.getByLabel('Occupancy / balance date', { exact: true }).fill('2026-10-31');
+    await page.getByRole('button', { name: 'Apply rental filters', exact: true }).click();
+    await expect(rentalMonth).toHaveValue('2026-10');
+  }
+  const expenseMonth = page.getByLabel('Expense month', { exact: true });
+  if (await expenseMonth.count()) {
+    await expenseMonth.fill('2026-10');
+    await page.getByLabel('Report through', { exact: true }).fill('2026-10-31');
+    await page.getByRole('button', { name: 'Apply expense filters', exact: true }).click();
+    await expect(expenseMonth).toHaveValue('2026-10');
+  }
+}
 async function section(page: Page, name: RegExp, propertyId: string) {
   if (name.test('Audit history')) {
     await page.getByRole('button', { name: 'Audit history', exact: true }).click();
@@ -108,6 +127,8 @@ async function section(page: Page, name: RegExp, propertyId: string) {
   await expect(link).toHaveCount(1);
   const href = await link.getAttribute('href'); expect(href).toContain(propertyId); await link.click();
   await expect(page).toHaveURL(server!.url + '/workspace/index.html' + href);
+  await expect(page.locator('#detail-content').getByRole('link', { name })).toHaveAttribute('aria-current', 'page');
+  await historicalFilters(page);
   await expect(page.locator('#detail-content').getByRole('link', { name })).toHaveAttribute('aria-current', 'page'); return href!;
 }
 function gate() {
@@ -171,7 +192,7 @@ test('Navigation independent: scoped property children, Back/direct URLs and sel
   await page.goto(server!.url + '/workspace/index.html' + first); await expect(page.locator('#main')).toContainText('NAV-A');
   await section(page, sections[3].name, a.id); await expect(page.locator('#main')).toContainText('SYNTHETIC-NAV-A-CASH');
   await page.goBack(); await expect(page).toHaveURL(server!.url + '/workspace/index.html' + first); await expect(page.locator('#main')).toContainText('NAV-A');
-  await page.goto(server!.url + '/workspace/index.html' + second); await expect(page.locator('#main')).toContainText('SYNTHETIC-NAV-A-CASH');
+  await page.goto(server!.url + '/workspace/index.html' + second); await historicalFilters(page); await expect(page.locator('#main')).toContainText('SYNTHETIC-NAV-A-CASH');
   await selectProperty(page, b); await section(page, sections[0].name, b.id); await expect(page.locator('#main')).toContainText('NAV-B'); await expect(page.locator('#main')).not.toContainText('NAV-A');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.screenshot({ path: `evidence/navigation-qa/screenshots/${info.project.name}-selected-property.png`, fullPage: true });
@@ -181,6 +202,7 @@ test('Navigation independent: legacy public hash destinations remain readable wi
   await start('absent'); await property('LEGACY'); await login(page);
   for (const [hash, token] of [['#tenants', 'Synthetic Navigation Tenant LEGACY'], ['#collections', 'SYNTHETIC-NAV-LEGACY-CASH'], ['#cheques', 'SYNTHETIC-NAV-LEGACY-CHEQUE'], ['#maintenance', 'Synthetic maintenance issue LEGACY'], ['#expenses', 'Synthetic landlord LEGACY'], ['#reports', 'Synthetic Navigation Villa LEGACY']]) {
     await page.goto(server!.url + '/workspace/index.html' + hash);
+    await historicalFilters(page);
     await expect(page.locator('#main')).not.toContainText(/Module unavailable|Unknown route|Not found/i);
     await expect(page.locator('#main')).toContainText(token);
     await noDeadSidebar(page, false);

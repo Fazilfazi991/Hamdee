@@ -16,7 +16,9 @@ async function login(page: Page) {
   await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
   // Drain dashboard reads before advancing the test clock; a response arriving
   // afterwards legitimately renews the browser CSRF proof.
-  await expect(page.getByRole('region', { name: 'Expenses by category', exact: true })).toBeVisible();
+  await expect(page.locator('#main')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('#daily-dashboard')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('#navigation')).not.toContainText('Checking…');
 }
 async function property() {
   await server.fixture.login();
@@ -44,15 +46,31 @@ test('Independent logout browser: successful logout, reload, Back and direct pro
   await page.screenshot({ path: `evidence/car-finance-qa/screenshots/${info.project.name}-logout-direct-denial.png`, fullPage: true });
 });
 
-test('Independent logout browser: expired CSRF reports unconfirmed, authenticated refresh then explicit sign-out succeeds', async ({ page }, info) => {
-  await login(page); server.fixture.clock.advance(60_001);
+test('Independent logout browser: expired CSRF is renewed before a single confirmed logout and cannot restore access', async ({ page }, info) => {
+  const saved = await property(); await login(page);
+  // Leave an actual protected route in history: Back must recheck that route,
+  // rather than returning to the browser's initial about:blank entry.
+  await page.goto(server.url + '/workspace/index.html#properties/' + saved.id);
+  await expect(page.getByRole('heading', { name: 'Synthetic independent logout villa', exact: true })).toBeVisible();
+  await expect(page.locator('#main')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('#navigation')).not.toContainText('Checking…');
+  server.fixture.clock.advance(60_001);
+  const traffic: { method: string; path: string; status: number }[] = [];
+  page.on('response', response => {
+    const path = new URL(response.url()).pathname;
+    if (path.startsWith('/api/hamdee/auth/')) traffic.push({ method: response.request().method(), path, status: response.status() });
+  });
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Unable to confirm sign-out', exact: true })).toBeVisible();
-  expect(server.fixture.fake.facts.calls.signOut).toBe(0);
-  await page.getByRole('button', { name: 'Retry connection', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await denied(page);
+  await denied(page);
+  await expect(page).toHaveURL(/\/login(?:[?#]|$)/);
+  const logout = traffic.findIndex(item => item.method === 'POST' && item.path.endsWith('/logout') && item.status === 200);
+  expect(logout).toBeGreaterThanOrEqual(0);
+  expect(traffic.slice(0, logout).some(item => item.method === 'GET' && item.path.endsWith('/state') && item.status === 200)).toBeTruthy();
+  expect(traffic.filter(item => item.path.endsWith('/logout'))).toHaveLength(1);
   expect(server.fixture.fake.facts.calls.signOut).toBe(1);
+  await page.reload(); await denied(page); await page.goBack(); await denied(page);
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Retry connection', exact: true })).toHaveCount(0);
   await page.screenshot({ path: `evidence/car-finance-qa/screenshots/${info.project.name}-logout-renewed.png`, fullPage: true });
 });
 
@@ -63,7 +81,7 @@ test('Independent logout browser: provider failure stays explicitly unconfirmed;
   await expect(page.locator('#main')).toContainText('Global sign-out has not been confirmed.');
   expect(server.fixture.fake.facts.calls.signOut).toBe(1); expect(server.fixture.fake.revoked.size).toBe(0);
   await page.getByRole('button', { name: 'Retry connection', exact: true }).click(); await denied(page);
-  await expect(page.locator('#main')).not.toContainText('You have signed out.');
+  await expect(page.locator('body')).not.toContainText('You have signed out.');
   expect(server.fixture.fake.facts.calls.signOut).toBe(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.screenshot({ path: `evidence/car-finance-qa/screenshots/${info.project.name}-logout-provider-unconfirmed.png`, fullPage: true });

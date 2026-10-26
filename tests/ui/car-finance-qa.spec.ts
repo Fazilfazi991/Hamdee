@@ -168,7 +168,7 @@ test('Independent full workspace: completed car write delayed across route reset
     expect(denied.headers()['set-cookie']).toMatch(/hamdee_csrf=;[\s\S]*Max-Age=0/i);
     // The direct API probe shares the browser cookie jar and clears its CSRF
     // cookie. Renew through the real UI before the next explicit sign-in.
-    await page.getByRole('button', { name: 'Check session', exact: true }).click();
+    await page.getByRole('button', { name: 'Check connection', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeEnabled();
     await login(page); const saved = await state(page, 'car-rentals');
     expect(saved.collections).toHaveLength(2); expect(saved.balances[0].collectedAmount).toBe('50');

@@ -7,7 +7,7 @@ import { unavailable } from '../../src/http';
 export async function startHarness(configured=true) {
   const f=await fixture();
   const root=new URL('../../public/',import.meta.url);
-  const files=['workspace/index.html','workspace/app.js', 'workspace/rental.js', 'workspace/expenses.js','workspace/adapter.js','workspace/foundation.css','shared/styles.css','shared/icons.js','shared/hamdee-logo.png','shared/inter-latin.woff2'];
+  const files=['workspace/index.html','workspace/app.js','workspace/daily-dashboard.js', 'workspace/rental.js', 'workspace/expenses.js','workspace/adapter.js','workspace/foundation.css','shared/styles.css','shared/icons.js','shared/hamdee-logo.png','shared/inter-latin.woff2'];
   const server=createServer(async(req,res)=>{
     try{
       const origin=`http://127.0.0.1:${(server.address() as {port:number}).port}`;

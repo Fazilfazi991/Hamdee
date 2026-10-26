@@ -263,6 +263,11 @@ test('collection choices follow the selected agreement and keep deposits, advanc
   await expect(d).not.toBeVisible();
   await expect(page.getByRole('region', { name: 'Collection register', exact: true })).toContainText('SYNTHETIC-USABILITY-PARTIAL');
   await page.reload();
+  // A new page starts daily operations in November; explicitly reopen the
+  // historical period before checking this October persistence fixture.
+  await page.getByLabel('Rent month', { exact: true }).fill('2026-10');
+  await page.getByLabel('Occupancy / balance date', { exact: true }).fill('2026-10-20');
+  await page.getByRole('button', { name: 'Apply rental filters', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Collection register', exact: true })).toContainText('SYNTHETIC-USABILITY-PARTIAL');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
 });

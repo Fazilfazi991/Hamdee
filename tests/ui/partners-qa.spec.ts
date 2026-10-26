@@ -59,7 +59,7 @@ test('Independent integrated owner partners: exact separate currencies, safe CSV
   await page.getByRole('button',{name:'Sign out',exact:true}).click();
   await expect(page.getByLabel('Email',{exact:true})).toBeVisible();
   await expect(page.locator('#navigation a[href="#partners"]')).toHaveCount(0);
-  await expect(page.locator('#main')).not.toContainText('9007199254740993.123456789011');
+  await expect(page.locator('body')).not.toContainText('9007199254740993.123456789011');
   await expect(page.locator('body')).not.toContainText('SYNTHETIC cancelled private draft');
 });
 
