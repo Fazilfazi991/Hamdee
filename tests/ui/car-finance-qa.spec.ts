@@ -18,7 +18,7 @@ async function login(page: Page) {
   await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email);
   await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true, level: 1 })).toBeVisible();
 }
 async function nav(page: Page, label: string) {
   const menu = page.getByRole('button', { name: 'Open navigation', exact: true });
@@ -159,7 +159,7 @@ test('Independent full workspace: completed car write delayed across route reset
     await page.getByRole('dialog').getByRole('button', { name: 'Save record', exact: true }).click(); await ready; expect(heldStatus).toBe(200);
     await page.goto(server.url + '/workspace/index.html#dashboard');
     await expect(page.getByRole('dialog')).not.toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Property overview', exact: true, level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Business Overview', exact: true, level: 1 })).toBeVisible();
     await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
     release(); await done; await expect(page.getByRole('region', { name: 'Car rental balances', exact: true })).toHaveCount(0);
     await page.reload(); await expect(page.getByLabel('Email', { exact: true })).toBeVisible();

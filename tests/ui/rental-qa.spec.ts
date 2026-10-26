@@ -11,7 +11,7 @@ async function login(page: Page) {
   await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email);
   await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
 }
 async function nav(page: Page, name: string) {
   const menu = page.getByRole('button', { name: 'Open navigation', exact: true }); if (await menu.isVisible()) await menu.click();
@@ -164,7 +164,7 @@ test('Rental CSRF recovery: logout wins over delayed proof and cannot restore a 
   await d.getByRole('button',{name:'Verify session',exact:true}).click();await ready;await expect(d.getByRole('button',{name:'Save record',exact:true})).toBeDisabled();
   const second=await page.context().newPage();
   try{
-    await second.goto(server.url+'/workspace/index.html#dashboard');await expect(second.getByRole('heading',{name:'Property overview',exact:true})).toBeVisible();await second.getByRole('button',{name:'Sign out',exact:true}).click();await expect(second.getByLabel('Email',{exact:true})).toBeVisible();
+    await second.goto(server.url+'/workspace/index.html#dashboard');await expect(second.getByRole('heading',{name:'Business Overview',exact:true})).toBeVisible();await second.getByRole('button',{name:'Sign out',exact:true}).click();await expect(second.getByLabel('Email',{exact:true})).toBeVisible();
     await page.evaluate(()=>{window.location.hash='dashboard';});await expect(page.getByLabel('Email',{exact:true})).toBeVisible();release();await settled;
     await expect(d).not.toBeVisible();await expect(page.locator('body')).not.toContainText('SYNTHETIC-LATE-PROOF');expect(writes).toBe(1);await page.reload();await expect(page.getByLabel('Email',{exact:true})).toBeVisible();
   }finally{release();await second.close();}

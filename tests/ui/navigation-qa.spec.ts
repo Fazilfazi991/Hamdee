@@ -28,7 +28,7 @@ async function credentials(page: Page, hash = '#dashboard') {
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
 }
 async function login(page: Page) {
-  await credentials(page); await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await credentials(page); await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
 }
 async function drawer(page: Page) {
   const button = page.getByRole('button', { name: 'Open navigation', exact: true });
@@ -129,7 +129,7 @@ test('Navigation independent: absent operations module keeps working core links 
   await nav(page, 'Expenses'); await expect(page.getByRole('heading', { name: 'Property expenses', exact: true, level: 1 })).toBeVisible();
   await nav(page, 'Reports'); await expect(page.getByRole('heading', { name: 'Monthly property report', exact: true })).toBeVisible();
   await nav(page, 'Villas & Properties'); await expect(page.getByRole('button', { name: 'Add property', exact: true })).toBeVisible();
-  await nav(page, 'Dashboard'); await expect(page.getByRole('heading', { name: 'Property overview', exact: true })).toBeVisible();
+  await nav(page, 'Dashboard'); await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();
 });
 
 test('Navigation independent: real service without006 is not eligible for Staff navigation', async ({ page }) => {

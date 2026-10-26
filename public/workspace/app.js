@@ -4,7 +4,7 @@ import { renderDailyDashboard,resetDailyDashboard } from './daily-dashboard.js';
 import { renderExpenses,resetExpenses,expenseReportPeriod } from './expenses.js';
 const api=new PropertyApi(),$=s=>document.querySelector(s),icon=window.icon;
 const isolatedDemo=isIsolatedDemoContext(window.location.hostname,$('meta[name="hamdee-demo"]')?.content);
-if(isolatedDemo){$('#isolated-demo-notice').hidden=false;document.querySelector('.sidebar-bottom .demo-indicator').textContent='DEMO · Isolated synthetic records';document.querySelector('.sidebar-bottom p').textContent='Synthetic examples only. No real client data.';document.querySelector('.workspace-footer span:last-child').textContent='DEMO · Never verified business balances';}
+if(isolatedDemo){$('#isolated-demo-notice').hidden=false;document.querySelector('.sidebar-bottom .demo-indicator').textContent='DEMO · Isolated local records';document.querySelector('.sidebar-bottom p').textContent='Synthetic examples only. No real client data.';document.querySelector('.workspace-footer span:last-child').textContent='DEMO · Never verified business balances';}
 const e=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let session=null,current=null,formContext=null,pending=null,trigger=null,routeSequence=0,authGeneration=0;
 let filters={archiveState:'active',q:'',limit:'50',cursor:''},page=null;
@@ -192,6 +192,7 @@ async function render(){
   staffWorkspace?.resetStaffCollections();resetOwnerOperations();
   resetExpenses(sameProperty);resetRental(sameProperty);invalidateForm();const controller=beginRead(),seq=routeSequence;navigation();if(!session){if(access)renderAccess();else await boot();return;}$('#main').setAttribute('aria-busy','true');
   const main=$('#main');
+  main.classList.toggle('business-overview-page',route==='dashboard');
   main.innerHTML='<div class="empty" role="status"><h2>Loading authorized records…</h2></div>';
   try{
     if(route==='partners'&&managed){
@@ -223,17 +224,9 @@ async function render(){
       else if(managed&&expenseSections.includes(section))await renderExpenses($('#detail-content'),{...options,section:section==='expenses'?null:section,prefetchedExpenses});
       else if(section==='history'&&can('audit'))await renderPropertyHistory(p.id,controller,seq);
     }else if(route==='dashboard'&&managed){
-      const result=await api.dashboard(controller.signal);if(!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;current=null;page=null;
-      const d=result.data;
-      main.innerHTML=heading('Property overview','Your saved properties, rentals and operating costs.',can('create')?btn('Add property','create','primary'):'')+
-        `<div class="metrics owner-metadata-metrics">${[['Total properties',d.totalProperties,'All saved records'],['Active properties',d.activeProperties,'Registered metadata records'],['Archived properties',d.archivedProperties,'History preserved']].map(([label,value,note])=>`<div class="metric"><div class="metric-top"><span>${label}</span>${icon('properties')}</div><div class="metric-value">${e(value)}</div><p class="metric-note">${note}</p></div>`).join('')}</div>`+
-        `<section class="panel"><div class="panel-header"><div><h2>Recently updated properties</h2><p>Up to ten saved records · Newest updates first</p></div>${btn('View properties','back')}</div>${d.recentProperties.length?table(d.recentProperties):'<div class="empty"><h2>No properties yet</h2><p>Add your first property to begin your register.</p></div>'}</section>`+
-        `<p class="muted-help">Choose a collection month to view confirmed rent dues, saved receipts and company funds. Personal finances stay separate.</p>`;
-      const dailyTarget=document.createElement('div');dailyTarget.id='daily-dashboard';main.append(dailyTarget);
-      // Property counts and recent villas are usable now; slower panels keep
-      // their own loading status without holding the entire workspace busy.
-      main.setAttribute('aria-busy','false');
-      await renderDailyDashboard(dailyTarget,{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
+      current=null;page=null;main.innerHTML='<div id="daily-dashboard"></div>';
+      // One aggregated operations read; villa lists remain in Villas & Properties.
+      await renderDailyDashboard($('#daily-dashboard'),{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
     }else if(['expenses','maintenance','reports'].includes(route)&&managed){
       current=null;page=null;main.innerHTML=heading(route==='reports'?'Monthly property report':route==='maintenance'?'Property maintenance':'Property expenses','Private owner records · Saved property costs and payments.')+'<div id="expense-workspace"></div>';
       await renderExpenses($('#expense-workspace'),{api,summaryOnly:route==='reports',signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
