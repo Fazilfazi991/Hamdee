@@ -119,10 +119,35 @@ async function runAccount(action,body={},form=null){
   }
 }
 async function logout(){
-  const proof=api.csrfToken;clearProtected();managed=true;recoveryView=false;api.csrfToken=proof;
+  clearProtected();managed=true;recoveryView=false;
   const generation=authGeneration,controller=new window.AbortController();authController=controller;accountBusy(true);
   $('#main').innerHTML='<section class="panel foundation-unavailable" role="status"><h1>Signing out…</h1><p>Clearing local access and confirming managed sign-out.</p></section>';
-  try{const result=await api.auth('logout',{},controller.signal);if(generation!==authGeneration||controller.signal.aborted)return;rememberAccess(result.data);renderAccess('You have signed out.');}
+  const active=()=>generation===authGeneration&&!controller.signal.aborted;
+  async function freshProof(){
+    const fresh=await api.authState(controller.signal);if(!active())return null;
+    // Renew only the write proof. Do not restore authenticated UI or start its
+    // background reads while the explicit logout is still in progress.
+    return api.rememberState(fresh.data);
+  }
+  try{
+    let state=await freshProof();if(!active()||!state)return;
+    if(state.state!=='authenticated'){renderAccess('Your local session is no longer active.');return;}
+    let result;
+    try{result=await api.auth('logout',{},controller.signal);}
+    catch(error){
+      if(!active())return;
+      // The server rejects this exact error before any sign-out mutation. A
+      // late read may have rotated the CSRF cookie, so renew once only here.
+      // Provider/network/unconfirmed failures must never be retried silently.
+      if(error.status!==403||error.code!=='CSRF_REJECTED'||error.uncertain)throw error;
+      state=await freshProof();if(!active()||!state)return;
+      if(state.state!=='authenticated'){renderAccess('Your local session is no longer active.');return;}
+      result=await api.auth('logout',{},controller.signal);
+    }
+    if(!active())return;
+    if(result.data?.state!=='anonymous')throw new Error('Managed sign-out returned an unexpected state.');
+    rememberAccess(result.data);renderAccess('You have signed out.');
+  }
   catch(error){if(generation!==authGeneration||controller.signal.aborted)return;api.csrfToken=null;showUnavailable(error.code==='SIGN_OUT_UNCONFIRMED'?'Sign-out unconfirmed':'Unable to confirm sign-out',error.message+' Local access has been cleared. Global sign-out has not been confirmed.');}
   finally{if(authController===controller){authController=null;accountBusy(false);}}
 }
