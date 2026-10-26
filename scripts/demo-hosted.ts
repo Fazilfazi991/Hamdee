@@ -3,12 +3,22 @@
 // service-role key, Production endpoint or automatic hosted execution exists.
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { seedDemoDataset, demoOverview, type DemoCommandTransport } from '../tests/support/demo-dataset';
 
 export const DEMO_HOSTED_PROJECT = 'jfynuafwsympxxpkqags';
 export const DEMO_HOSTED_ORIGIN = 'https://hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app';
 export interface DemoHostedTarget { projectRef: string; origin: string; ownerId: string }
 export interface DemoHostedPrivateInput extends DemoHostedTarget { email: string; password: string; trustedOidcToken?: string }
+/** Operator-side pacing only. Never changes server limits or retries a failure.
+ * Each command can perform several live identity checks; bulk writes must leave
+ * room for those checks and the read-only destination/reconciliation requests. */
+export function paceDemoCommands(transport:DemoCommandTransport,wait:()=>Promise<void>=()=>delay(5_000)):DemoCommandTransport {
+  return {login:()=>transport.login(),async request(method,route,body,headers){
+    if(method==='POST')await wait();
+    return transport.request(method,route,body,headers);
+  }};
+}
 export function verifyDemoHostedTarget(target: DemoHostedTarget) {
   assert.equal(target.projectRef, DEMO_HOSTED_PROJECT, 'Only the separately approved DEMO project is permitted');
   assert.equal(target.origin, DEMO_HOSTED_ORIGIN, 'Only the separately approved DEMO Preview origin is permitted');
@@ -104,7 +114,13 @@ async function main() {
     stage = 'owner_login'; await transport.login();
     stage = 'destination_preflight'; await verifyDemoSeedDestination(transport);
     // The seeder's login callback reuses this already-verified private session.
-    stage = 'synthetic_commands'; const data = await seedDemoDataset({ login: async () => {}, request: transport.request.bind(transport) });
+    const paced=paceDemoCommands(transport);
+    let commands=0;
+    stage = 'synthetic_commands'; const data = await seedDemoDataset({ login: async () => {},async request(...args){
+      const response=await paced.request(...args);
+      if(response.ok&&++commands%10===0)console.log('DEMO progress: '+commands+' synthetic commands verified; paced writes continue.');
+      return response;
+    }});
     stage = 'reconciliation';
     const staff = await demoOverview(transport, 'staff-collections'), company = await demoOverview(transport, 'company-finance'), personal = await demoOverview(transport, 'personal-finance');
     assert.deepEqual(staff.totals.map((row: { balance: string }) => row.balance).sort(), ['0', '700']);
@@ -113,8 +129,13 @@ async function main() {
     stage = 'logout'; assert.equal((await transport.request('POST', '/api/hamdee/auth/logout', {})).status, 200);
     assert.equal((await transport.request('GET', '/api/hamdee/v1/properties')).status, 401);
     console.log(JSON.stringify({ status: 'DEMO_SEED_VERIFIED', projectRef: DEMO_HOSTED_PROJECT, properties: 1, rooms: 4, contacts: 4, vehicles: 3, collectors: 2, accounts: 4, currency: 'XTS', collectorBalances: ['700', '0'], companyCash: '1300', companyBank: '1000', personalCash: '175', personalBank: '100', logoutDeniedAccess: true }));
-  } catch {
-    console.error('DEMO seed stopped at ' + stage + '. No automatic retry, deletion, reset or Production fallback.'); process.exitCode = 1;
+  } catch (error) {
+    // Fixed-format diagnostics only: never print exceptions, response bodies,
+    // submitted credentials, session cookies or tokens.
+    const failure=error as {actual?:unknown;message?:unknown};
+    const status=typeof failure?.actual==='number'&&Number.isInteger(failure.actual)&&failure.actual>=400&&failure.actual<=599?' HTTP '+failure.actual:'';
+    const code=typeof failure?.message==='string'?failure.message.match(/"code":"([A-Z_]{1,64})"/)?.[1]:undefined;
+    console.error('DEMO seed stopped at ' + stage + status + (code?' '+code:'') + '. No automatic retry, deletion, reset or Production fallback.'); process.exitCode = 1;
   }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

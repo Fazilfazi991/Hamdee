@@ -5,7 +5,7 @@ import { seedDemoDataset, type DemoCommandTransport } from './support/demo-datas
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
-import { createDemoHostedTransport, verifyDemoHostedTarget, verifyDemoSeedDestination, DEMO_HOSTED_ORIGIN, DEMO_HOSTED_PROJECT } from '../scripts/demo-hosted';
+import { createDemoHostedTransport, paceDemoCommands, verifyDemoHostedTarget, verifyDemoSeedDestination, DEMO_HOSTED_ORIGIN, DEMO_HOSTED_PROJECT } from '../scripts/demo-hosted';
 import { ownerQaInputs } from './support/owner-crm-harness';
 import { createOwnerApplication } from '../src/owner-runtime';
 
@@ -102,4 +102,43 @@ test('Managed DEMO transport retains server cookies/CSRF, executes idempotent AP
   assert.equal(seeded.rooms.length, 4); assert.equal(seeded.accounts.length, 4);
   assert.equal((await transport.request('POST', '/api/hamdee/auth/logout', {})).status, 200);
   assert.equal((await transport.request('GET', '/api/hamdee/v1/properties')).status, 401);
+});
+
+test('Bulk DEMO reproduces hosted rate-limit stop, then paced restart preserves every existing ID and full replay adds no records',async t=>{
+  const f=await createOwnerQaFixture({migrationFiles:['006_local_operations_records.up.sql','007_local_car_rentals.up.sql','008_local_partner_records.up.sql'],
+    timings:{idleTimeoutMs:900_000,absoluteTimeoutMs:28_800_000,csrfLifetimeMs:900_000}});
+  t.after(()=>f.close());
+  const buckets=new Map<string,{count:number;reset:number;blocked:number}>();
+  const app=createOwnerApplication({...f.options,policy:{...f.options.policy,origin:DEMO_HOSTED_ORIGIN,cookieSecure:true},database:f.database,logger:()=>{},
+    limiter:{async consume(flow,_key,now){let b=buckets.get(flow);if(!b||now>=b.reset){b={count:0,reset:now+60_000,blocked:0};buckets.set(flow,b);}
+      if(now<b.blocked)return false;if(++b.count>120){b.blocked=now+60_000;return false;}return true;}}});
+  const connect=()=>createDemoHostedTransport({projectRef:DEMO_HOSTED_PROJECT,origin:DEMO_HOSTED_ORIGIN,ownerId:f.member!.id,email:f.inputs.email,password:f.inputs.password},async(value,options)=>{
+    const request=new Request(value,options),response=new URL(String(value)).pathname.startsWith('/api/hamdee/auth/')?await app.handleAuth(request):await app.handleProperties(request);
+    const headers=new Headers(response.headers);headers.set('x-hamdee-project-ref',DEMO_HOSTED_PROJECT);headers.set('x-hamdee-environment','isolated-demo');
+    return new Response(response.body,{status:response.status,headers});
+  });
+  const initial=connect();await initial.login();await verifyDemoSeedDestination(initial);
+  await assert.rejects(seedDemoDataset({login:async()=>{},request:initial.request.bind(initial)}),/vehicle-expense-Yaris:.*RATE_LIMITED/s);
+  const partial=(await f.pg!.query<{id:string}>('SELECT id FROM hamdee_private.properties')).rows;assert.equal(partial.length,1);
+  assert.equal((await f.pg!.query<{n:number}>('SELECT count(*)::int AS n FROM hamdee_private.car_receipts')).rows[0].n,1);
+  assert.equal(buckets.get('refresh')?.count,121,'Live identity checks retain the real120/minute limit');
+  const snapshot=async()=>{
+    const result:Record<string,unknown>={};
+    for(const {tablename}of(await f.pg!.query<{tablename:string}>("SELECT tablename FROM pg_tables WHERE schemaname='hamdee_private' ORDER BY tablename")).rows){
+      assert.match(tablename,/^[a-z_]+$/);result[tablename]=(await f.pg!.query(`SELECT to_jsonb(r) AS row FROM hamdee_private.${tablename} r ORDER BY to_jsonb(r)::text`)).rows;
+    }return result;
+  };
+  const resume=async()=>{
+    f.clock.advance(60_001);const transport=connect();await transport.login();await verifyDemoSeedDestination(transport);
+    let waits=0;const paced=paceDemoCommands(transport,async()=>{waits++;f.clock.advance(5_000);});
+    const data=await seedDemoDataset({login:async()=>{},request:paced.request.bind(paced)});assert.ok(waits>50);
+    assert.equal(data.property.id,partial[0].id);await verifyDemoSeedDestination(transport);
+    const staff=await transport.request('GET','/api/hamdee/v1/staff-collections?month=2026-10&asOf=2026-10-31');assert.equal(staff.status,200);
+    assert.deepEqual((await staff.json()).data.totals.map((row:{balance:string})=>row.balance).sort(),['0','700']);
+    assert.equal((await transport.request('POST','/api/hamdee/auth/logout',{})).status,200);
+    assert.equal((await transport.request('GET','/api/hamdee/v1/properties')).status,401);
+    return data;
+  };
+  const complete=await resume(),before=await snapshot();assert.equal(complete.vehicles.length,3);assert.equal(complete.accounts.length,4);
+  const repeated=await resume();assert.equal(repeated.rooms[0].id,complete.rooms[0].id);assert.deepEqual(await snapshot(),before,'All private rows and financial postings are unchanged by same-key replay');
 });
