@@ -29,6 +29,7 @@ test('Business overview empty and future-only setup do not invent currency, rent
  const usd=d.overview.currencies[0];assert.equal(usd.currency,'USD');
  for(const key of ['totalCollected','pendingCollection','companyCash','companyBank','monthlyExpenses'])assert.equal(usd[key],null,key);
  assert.deepEqual(usd.trend,[]);assert.equal(usd.trendReady,false);assert.equal(usd.operations.staffHeld,null);
+ assert.equal(usd.operations.overdueAmount,null);assert.equal(usd.operations.overdueCount,0);assert.equal(usd.operations.oldestOverdueDate,null);
 });
 
 test('November allocation KPI, receipt-date trend, deposits/advances and verified accounts retain different exact bases',async t=>{
@@ -54,6 +55,7 @@ test('November allocation KPI, receipt-date trend, deposits/advances and verifie
  assert.equal(q.rent.expected,'1000');assert.equal(q.rent.unappliedAdvances,'100');assert.equal(q.rent.depositHeld,'500');
  assert.equal(q.operations.carCollected,'100.125');assert.equal(q.operations.pendingRentCheques,'150');assert.equal(q.operations.pendingCarCheques,'75');assert.equal(q.operations.pendingCheques,'225');
  assert.equal(q.operations.upcomingAmount,'550');assert.equal(q.operations.upcomingCount,1);assert.equal(q.operations.nextDueDate,'2026-11-05');
+ assert.equal(q.operations.overdueAmount,'0');assert.equal(q.operations.overdueCount,0);assert.equal(q.operations.oldestOverdueDate,null);
  assert.deepEqual(q.trend,[{month:'2026-10',collections:'0',expenses:'10'},{month:'2026-11',collections:'350.125',expenses:'120.125'}]);assert.equal(q.trendReady,true);
  assert.match(d.overview.basis.totalCollected,/issued rent dues/);assert.match(d.overview.basis.expenses,/Recorded property & vehicle costs/);
  assert.deepEqual((await f.pg!.query('SELECT id,delta::text FROM hamdee_private.ops_money ORDER BY id')).rows,before,'Dashboard only reads ledgers');
@@ -66,4 +68,27 @@ test('Only actual activity months become trend rows and a single month never pre
  assert.deepEqual(q.trend,[{month:'2026-11',collections:'0',expenses:'10'}]);assert.equal(q.trendReady,false);assert.equal(q.operations.carCollected,null);
  const emptyCosts=(await overview(f,'2026-11-01')).overview.currencies[0];assert.equal(emptyCosts.monthlyExpenses,null);assert.deepEqual(emptyCosts.trend,[]);
  const earlierMonth=(await overview(f,'2026-11-30','2026-10')).overview.currencies[0];assert.equal(earlierMonth.totalCollected,null);assert.equal(earlierMonth.pendingCollection,null);assert.equal(earlierMonth.monthlyExpenses,'0');assert.deepEqual(earlierMonth.trend,[]);
+});
+
+test('Overdue totals use the full selected-month issued set, strict cutoff and saved allocations without generating dues',async t=>{
+ const f=await setup(t),a=await terms(f);
+ const secondRoom=await rental(f,'create-room',{propertyId:a.p.id,code:'SYN-OVERDUE-SECOND'});
+ const secondAgreement=await rental(f,'create-agreement',{roomId:secondRoom.id,tenantId:a.tenant.id,monthlyRent:'200',currency:'QAR',depositRequired:'0',dueTerms:'Explicit tenth day',startDate:'2026-11-01',endDate:null});
+ await rental(f,'issue-due',{agreementId:secondAgreement.id,period:'2026-11',dueDate:'2026-11-10',amount:'200'});
+ const advance=await rental(f,'record-collection',{agreementId:a.agreement.id,kind:'advance',method:'cash',amount:'300',receivedDate:'2026-10-26'});
+ await rental(f,'allocate-advance',{collectionId:advance.id,dueId:a.due.id,amount:'100',allocationDate:'2026-11-06'});
+ await rental(f,'allocate-advance',{collectionId:advance.id,dueId:a.due.id,amount:'200',allocationDate:'2026-11-11'});
+ const before=(await f.pg!.query('SELECT id,amount_minor::text FROM hamdee_private.rent_dues ORDER BY id')).rows;
+ const onDueDate=(await overview(f,'2026-11-05')).overview.currencies[0];
+ assert.equal(onDueDate.operations.overdueAmount,'0');assert.equal(onDueDate.operations.overdueCount,0);assert.equal(onDueDate.operations.oldestOverdueDate,null);
+ assert.equal(onDueDate.operations.upcomingAmount,'1200');assert.equal(onDueDate.operations.upcomingCount,2);
+ const partial=(await overview(f,'2026-11-06')).overview.currencies[0];
+ assert.equal(partial.operations.overdueAmount,'900');assert.equal(partial.operations.overdueCount,1);assert.equal(partial.operations.oldestOverdueDate,'2026-11-05');
+ assert.equal(partial.operations.upcomingAmount,'200');assert.equal(partial.operations.upcomingCount,1);
+ const tenth=(await overview(f,'2026-11-10')).overview.currencies[0];assert.equal(tenth.operations.overdueAmount,'900');assert.equal(tenth.operations.upcomingAmount,'200');
+ const eleventh=(await overview(f,'2026-11-11')).overview.currencies[0];
+ assert.equal(eleventh.operations.overdueAmount,'900');assert.equal(eleventh.operations.overdueCount,2);assert.equal(eleventh.operations.oldestOverdueDate,'2026-11-05');
+ assert.equal(eleventh.operations.upcomingAmount,'0');assert.equal(eleventh.operations.upcomingCount,0);
+ const otherMonth=(await overview(f,'2026-11-11','2026-10')).overview.currencies[0];assert.equal(otherMonth.operations.overdueAmount,null);assert.equal(otherMonth.operations.overdueCount,0);
+ assert.deepEqual((await f.pg!.query('SELECT id,amount_minor::text FROM hamdee_private.rent_dues ORDER BY id')).rows,before,'Read summaries preserve every issued obligation');
 });
