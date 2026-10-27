@@ -70,7 +70,7 @@ test('Unknown openings and no confirmed rental terms stay Not verified; a genuin
 
 test('An empty source response assumes no currency or bank opening and invents no historical trend bars',()=>{
  const data=dashboard();data.overview.currencies=[];const html=daily.dailyDashboardMarkup(data);
- assert.match(html,/No verified currency/);assert.match(html,/Not verified yet/);assert.match(html,/name="currency"[^>]*disabled/);
+ assert.match(html,/<option>Not set<\/option>/);assert.match(html,/No entries yet/);assert.match(html,/name="currency"[^>]*disabled/);
  assert.doesNotMatch(html,/>QAR|overview-bar-receipts|NaN|Infinity/);
 });
 
@@ -138,7 +138,7 @@ test('Funds comparison keeps cash, bank and custody separate without an invented
  assert.equal((html.match(/class="overview-funds-column (?:cash|bank|staff)"/g)||[]).length,3);
  for(const label of ['Company cash','Company bank','Held by collectors'])assert(html.includes(label));
  for(const value of ['1,850.00','1,000.00','700.00'])assert(html.includes(value));
- assert.match(html,/Separate locations · not income or available profit/);assert.doesNotMatch(html,/3,550|free cash|PERSONAL|987654321|overview-trend-empty/);
+ assert.match(html,/Separate balances · not income or profit/);assert.doesNotMatch(html,/3,550|free cash|PERSONAL|987654321|overview-trend-empty/);
 });
 
 test('Funds comparison preserves negative exact balances and unknown values instead of clipping them into positive or zero balances',()=>{
@@ -146,7 +146,7 @@ test('Funds comparison preserves negative exact balances and unknown values inst
  const html=daily.dailyDashboardMarkup(data),funds=html.split('overview-funds-card')[1].split('overview-activity-card')[0];
  assert.match(funds,/bank negative/);assert.match(funds,/Negative balance shown below zero/);assert.match(funds,/-125\.123456789/);assert.match(funds,/>XTS<\/span> 0\.00/);assert.match(funds,/Not verified/);
  const bank=funds.split('overview-funds-column bank negative')[1].split('</g>')[0];assert.match(bank,/<rect x="153" y="14" width="50" height="132"/);
- const staff=funds.split('overview-funds-column staff')[1].split('</g>')[0];assert.doesNotMatch(staff,/<rect/);
+ const staff=funds.split('overview-funds-column staff')[1].split('</g>')[0];assert.match(staff,/overview-placeholder-track/);assert.doesNotMatch(staff,/<title>/);
 });
 
 test('Three charts are immediately visible from one summary read, without a toggle or extra API request',async()=>{
@@ -164,7 +164,7 @@ test('Six supplied activity months render exactly six readable short ticks and p
 
 test('No activity creates only a compact setup state, while verified funds and rent remain visible',async()=>{
  const data=dashboard();data.overview.currencies[0].trendReady=false;data.overview.currencies[0].trend=[];
- const {target,calls}=await render(data);assert.match(target.innerHTML,/Recorded Activity/);assert.match(target.innerHTML,/Not verified yet/);assert.match(target.innerHTML,/Company Funds/);assert.match(target.innerHTML,/1,850\.00/);assert.doesNotMatch(target.innerHTML,/class="overview-bar-receipts"|overview-trend-empty/);assert.equal(calls.length,1);
+ const {target,calls}=await render(data);assert.match(target.innerHTML,/Recorded Activity/);assert.match(target.innerHTML,/No entries yet/);assert.match(target.innerHTML,/Company Funds/);assert.match(target.innerHTML,/1,850\.00/);assert.doesNotMatch(target.innerHTML,/class="overview-bar-receipts"|overview-trend-empty/);assert.equal(calls.length,1);
 });
 
 test('Overdue visibility uses server amount, count and oldest date rather than recalculating due status in the client',()=>{
@@ -184,7 +184,16 @@ test('Dashboard route no longer requests duplicate property metadata or lists vi
  const branch=app.split("}else if(route==='dashboard'&&managed){")[1].split("}else if(['expenses'")[0];
  assert.doesNotMatch(branch,/api\.dashboard|Total properties|Recently updated|table\(/);assert.match(branch,/renderDailyDashboard/);assert.match(app,/main\.classList\.toggle\('business-overview-page'/);
  for(const width of ['1100px','850px','640px'])assert(css.includes('max-width:'+width));assert.match(css,/\.overview-kpis\{display:grid;grid-template-columns:repeat\(5/);
- const compact=css.split('@media(min-width:1100px) and (max-height:950px)')[1]?.split('\n')[0];assert(compact);assert.match(compact,/\.overview-donut\{width:128px;height:128px\}/);assert.match(compact,/\.overview-bar-chart\{height:116px;min-height:116px/);assert.doesNotMatch(compact,/display:none|overflow:hidden|font-size:[1-8]px/);
- assert.match(css,/@media\(max-width:640px\)\{\.overview-chart-month-full\{display:none\}\.overview-chart-month-short\{display:block;font-size:22px\}\.overview-chart-scale\{font-size:22px\}\}/);
+ const compact=css.split('@media(min-width:1100px) and (max-height:850px)')[1]?.split('\n')[0];assert(compact);assert.match(compact,/min-height:310px/);assert.match(compact,/height:158px/);assert.doesNotMatch(compact,/display:none|overflow:hidden|font-size:[1-8]px/);
+ assert.match(css,/\.overview-kpi:nth-child\(4\)/);assert.match(css,/\.overview-chart-card\{display:flex;flex-direction:column/);
+
  assert.doesNotMatch(css,/\.overview[^\n]*(?:animation:|transition:all)/);
+});
+
+test('Missing financial figures use one setup notice, accessible dashes and unscaled chart placeholders rather than repeated warnings or invented zero amounts',()=>{
+ const data=dashboard();data.overview.currencies=[];const html=daily.dailyDashboardMarkup(data);
+ assert.equal((html.match(/class="overview-setup-notice"/g)||[]).length,1);
+ assert.match(html,/aria-label="Not verified"[^>]*>—<\/span>/);assert.match(html,/Confirm rent terms →/);assert.match(html,/Set opening balances →/);
+ assert.match(html,/No entries yet/);assert.doesNotMatch(html,/>Not verified<|overview-funds-zero-label|overview-bar-receipts|overview-donut-allocated/);
+ assert.match(html,/No financial values are plotted/);assert.match(html,/href="#properties"[^>]*>[^<]*|Record collection/);
 });
