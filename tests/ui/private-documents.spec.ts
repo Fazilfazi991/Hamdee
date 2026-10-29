@@ -20,7 +20,7 @@ test('Owner can save and privately download a room document on desktop and mobil
     renderDocuments(document.querySelector('#documents'),{api,property:${JSON.stringify(property)},rooms:[${JSON.stringify(room)}],signal:new AbortController().signal,isCurrent:()=>true,
       verifyAccess:async()=>{const state=await api.authState();api.rememberState(state.data);return state.data.state==='authenticated';},onAccessLoss:()=>{document.body.textContent='Session expired';}});
     </script>`}));
-  await page.goto(server.url+'/login');await page.getByLabel('Email',{exact:true}).fill(server.fixture.inputs.email);await page.getByLabel('Password',{exact:true}).fill(server.fixture.inputs.password);await page.getByRole('button',{name:'Sign in',exact:true}).click();
+  await page.goto(server.url+'/login');await page.getByLabel('Email',{exact:true}).fill(server.fixture.inputs.email);await page.getByLabel('Password',{exact:true}).fill(server.fixture.inputs.password);await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page).toHaveURL(/\/workspace\/index\.html/);
   await page.goto(server.url+'/synthetic-documents-fixture');await expect(page.getByRole('heading',{name:'Documents',exact:true})).toBeVisible();
   await page.getByLabel('Room',{exact:true}).selectOption(room.id);
   const contents=Buffer.from('%PDF-1.4\n% synthetic owner test\n%%EOF');

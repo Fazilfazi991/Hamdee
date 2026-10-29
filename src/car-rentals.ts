@@ -7,20 +7,19 @@
  * multiplied. No proration, tariffs, automatic billing, refunds or returns.
  * Availability uses inclusive saved rental dates and current vehicle status.
  */
-export type VehicleStatus='active'|'maintenance'|'inactive'|'needs_confirmation';
-export interface VehicleRecord {id:string;registration:string|null;make:string|null;model:string;status:VehicleStatus;notes:string;version:number}
+export type VehicleStatus='active'|'maintenance'|'inactive';
+export interface VehicleRecord {id:string;registration:string;make:string;model:string;status:VehicleStatus;notes:string;version:number}
 export interface CarAgreementRecord {id:string;vehicleId:string;agreementKey:string;customerName:string;customerContact:string;startDate:string;endDate:string;agreedAmount:string;currency:string;billingPeriod:string;reference:string;notes:string;previousAgreementId:string|null;vehicleSnapshot:VehicleRecord}
 export interface CarReceiptRecord {id:string;agreementId:string;vehicleId:string;receiptKey:string;receivedDate:string;amount:string;currency:string;method:'cash'|'bank'|'cheque';status:'recorded'|'pending';reference:string;notes:string}
 export interface CarExpenseRecord {id:string;vehicleId:string;agreementId:string|null;expenseKey:string;expenseDate:string;amount:string;currency:string;kind:'expense'|'maintenance';description:string;vendorName:string;reference:string;notes:string}
 export type CarCommand=
- | {action:'create-vehicle';registration:string|null;make:string|null;model:string;status:VehicleStatus;notes?:string;sourceKey?:string;sourceReference?:string}
- | {action:'update-vehicle';vehicleId:string;expectedVersion:number;registration?:string|null;make?:string|null;model?:string;status?:VehicleStatus;notes?:string}
- | {action:'add-source-reference';vehicleId:string;sourceKey:string;sourceReference:string;amountReference?:string}
+ | {action:'create-vehicle';registration:string;make:string;model:string;status:VehicleStatus;notes?:string}
+ | {action:'update-vehicle';vehicleId:string;expectedVersion:number;registration?:string;make?:string;model?:string;status?:VehicleStatus;notes?:string}
  | {action:'create-agreement';vehicleId:string;agreementKey:string;customerName:string;customerContact?:string;startDate:string;endDate:string;agreedAmount:string;currency:string;billingPeriod:string;reference?:string;notes?:string;previousAgreementId?:string}
  | {action:'record-collection';agreementId:string;receiptKey:string;receivedDate:string;amount:string;currency:string;method:'cash'|'bank'|'cheque';reference?:string;notes?:string}
  | {action:'record-expense'|'record-maintenance';vehicleId:string;agreementId?:string;expenseKey:string;expenseDate:string;amount:string;currency:string;description:string;vendorName?:string;reference?:string;notes?:string};
 export interface CarQuery {month:string;asOf:string;vehicleId?:string;availabilityStart?:string;availabilityEnd?:string}
-export interface CarAvailability {vehicleId:string;startDate:string;endDate:string;available:boolean;reason:'available'|'maintenance'|'inactive'|'rented'|'needs_confirmation';agreementIds:string[]}
+export interface CarAvailability {vehicleId:string;startDate:string;endDate:string;available:boolean;reason:'available'|'maintenance'|'inactive'|'rented';agreementIds:string[]}
 export interface CarBalance {agreementId:string;vehicleId:string;currency:string;agreedAmount:string;collectedAmount:string;outstandingAmount:string;pendingChequeAmount:string}
 export interface CarMonthlyTotal {vehicleId:string;currency:string;cashCollected:string;recordedCosts:string;recordedComparison:string;pendingCheques:string}
 export interface CarOverview {vehicles:VehicleRecord[];agreements:CarAgreementRecord[];availability:CarAvailability[];balances:CarBalance[];collections:CarReceiptRecord[];expenses:CarExpenseRecord[];history:Record<string,unknown>[];summary:CarMonthlyTotal[];month:string;asOf:string;moneyUnit:'decimal-major-unit-strings';basis:string}
@@ -37,13 +36,12 @@ import { allowFields,operationCheck as check,operationWrite,operationView,insert
 
 async function vehicle(sql:Sql,value:unknown):Promise<OperationRow>{const row=(await sql.query<OperationRow>('SELECT * FROM hamdee_private.car_vehicles WHERE id=$1',[id(value)])).rows[0];check(row,'Vehicle not found.','NOT_FOUND',404);return row;}
 async function agreement(sql:Sql,value:unknown):Promise<OperationRow>{const row=(await sql.query<OperationRow>('SELECT *,agreed_amount::text AS agreed_amount FROM hamdee_private.car_agreements WHERE id=$1',[id(value)])).rows[0];check(row,'Car agreement not found.','NOT_FOUND',404);return row;}
-function status(value:unknown):VehicleStatus {check(['active','maintenance','inactive','needs_confirmation'].includes(String(value)),'Choose an explicit vehicle status.');return value as VehicleStatus;}
+function status(value:unknown):VehicleStatus {check(['active','maintenance','inactive'].includes(String(value)),'Choose an explicit vehicle status.');return value as VehicleStatus;}
 
 export class CarRentalService {
  constructor(private readonly properties:PropertyService){}
  async mutate(identity:Identity,input:unknown,key:string,requestId:string):Promise<CarMutationResult>{
-  const b=allowFields(input,{'create-vehicle':['registration','make','model','status','notes','sourceKey','sourceReference'],'update-vehicle':['vehicleId','expectedVersion','registration','make','model','status','notes'],
-   'add-source-reference':['vehicleId','sourceKey','sourceReference','amountReference'],
+  const b=allowFields(input,{'create-vehicle':['registration','make','model','status','notes'],'update-vehicle':['vehicleId','expectedVersion','registration','make','model','status','notes'],
    'create-agreement':['vehicleId','agreementKey','customerName','customerContact','startDate','endDate','agreedAmount','currency','billingPeriod','reference','notes','previousAgreementId'],
    'record-collection':['agreementId','receiptKey','receivedDate','amount','currency','method','reference','notes'],
    'record-expense':['vehicleId','agreementId','expenseKey','expenseDate','amount','currency','description','vendorName','reference','notes'],
@@ -53,28 +51,12 @@ export class CarRentalService {
    if(b.action==='create-vehicle'||b.action==='update-vehicle'){
     const current=b.action==='update-vehicle'?await vehicle(sql,b.vehicleId):null;
     if(current){check(Number.isSafeInteger(b.expectedVersion)&&b.expectedVersion===current.version,'Reload and review the current vehicle revision.','VERSION_CONFLICT',412);check(['registration','make','model','status','notes'].some(k=>k in b),'Enter vehicle changes.');}
-    const suppliedRegistration='registration' in b?b.registration:current?.registration;
-    const registration=suppliedRegistration==null||suppliedRegistration===''?null:text(suppliedRegistration,80).toUpperCase();
-    const suppliedMake='make' in b?b.make:current?.make;
-    const make=suppliedMake==null||suppliedMake===''?null:text(suppliedMake,120);
-    if(registration)check(!(await sql.query('SELECT id FROM hamdee_private.car_vehicles WHERE registration=$1 AND ($2::uuid IS NULL OR id<>$2)',[registration,current?.id??null])).rows.length,'This registration is already recorded.','DUPLICATE_VEHICLE',409);
-    const values={registration,make,model:text('model' in b?b.model:current?.model,120),status:status('status' in b?b.status:current?.status),notes:text('notes' in b?b.notes:current?.notes??'',2000,false)};
-    const hasSource=b.sourceKey!==undefined||b.sourceReference!==undefined;
-    if(!registration||!make||values.status==='needs_confirmation'||hasSource)check((await sql.query<{ready:boolean}>("SELECT to_regclass('hamdee_private.car_source_references') IS NOT NULL AS ready")).rows[0].ready,'Vehicle source records are not enabled yet.','CAR_SOURCE_UNAVAILABLE',503);
-    if(hasSource){
-      check(!current&&values.status==='needs_confirmation','Source vehicles require an unconfirmed status.');
-      check(!(await sql.query('SELECT id FROM hamdee_private.car_vehicles WHERE lower(trim(model))=lower(trim($1))',[values.model])).rows.length,'A vehicle with this model already exists. Review it before importing this source.','SOURCE_VEHICLE_REVIEW',409);
-      check(!(await sql.query('SELECT id FROM hamdee_private.car_source_references WHERE source_key=$1',[text(b.sourceKey,240)])).rows.length,'This source reference is already recorded.','DUPLICATE_SOURCE',409);
-    }
+    const registration=text('registration' in b?b.registration:current?.registration,80).toUpperCase();
+    check(!(await sql.query('SELECT id FROM hamdee_private.car_vehicles WHERE registration=$1 AND ($2::uuid IS NULL OR id<>$2)',[registration,current?.id??null])).rows.length,'This registration is already recorded.','DUPLICATE_VEHICLE',409);
+    const values={registration,make:text('make' in b?b.make:current?.make,120),model:text('model' in b?b.model:current?.model,120),status:status('status' in b?b.status:current?.status),notes:text('notes' in b?b.notes:current?.notes??'',2000,false)};
     if(current){row=(await sql.query<OperationRow>(`UPDATE hamdee_private.car_vehicles SET registration=$2,make=$3,model=$4,status=$5,notes=$6,version=version+1,event_id=$7 WHERE id=$1 AND version=$8 RETURNING *`,[current.id,values.registration,values.make,values.model,values.status,values.notes,eventId,b.expectedVersion])).rows[0];check(row,'Reload the current vehicle revision.','VERSION_CONFLICT',412);}
     else row=await insertOperation(sql,'car_vehicles',{id:randomUUID(),...values,version:1,event_id:eventId});
     await insertOperation(sql,'car_vehicle_revisions',{vehicle_id:row.id,version:row.version,profile:JSON.stringify(operationView(row)),event_id:eventId});
-    if(hasSource)await insertOperation(sql,'car_source_references',{id:randomUUID(),vehicle_id:row.id,source_key:text(b.sourceKey,240),source_reference:text(b.sourceReference,1000),amount_reference:'',event_id:eventId});
-   }else if(b.action==='add-source-reference'){
-    check((await sql.query<{ready:boolean}>("SELECT to_regclass('hamdee_private.car_source_references') IS NOT NULL AS ready")).rows[0].ready,'Vehicle source records are not enabled yet.','CAR_SOURCE_UNAVAILABLE',503);
-    const v=await vehicle(sql,b.vehicleId),sourceKey=text(b.sourceKey,240);
-    check(!(await sql.query('SELECT id FROM hamdee_private.car_source_references WHERE source_key=$1',[sourceKey])).rows.length,'This source reference is already recorded.','DUPLICATE_SOURCE',409);
-    row=await insertOperation(sql,'car_source_references',{id:randomUUID(),vehicle_id:v.id,source_key:sourceKey,source_reference:text(b.sourceReference,1000),amount_reference:text(b.amountReference??'',100,false),event_id:eventId});
    }else if(b.action==='create-agreement'){
     const v=await vehicle(sql,b.vehicleId),agreementKey=id(b.agreementKey),start=date(b.startDate),end=date(b.endDate);
     check(end>=start,'Rental end date must not precede its start.');
@@ -118,7 +100,6 @@ export class CarRentalService {
      coalesce((SELECT sum(amount) FROM receipts r WHERE r.vehicle_id=k.vehicle_id AND r.currency=k.currency AND r.status='pending' AND to_char(r.received_date,'YYYY-MM')=$3),0) AS pending_cheques,
      coalesce((SELECT sum(amount) FROM expenses e WHERE e.vehicle_id=k.vehicle_id AND e.currency=k.currency AND to_char(e.expense_date,'YYYY-MM')=$3),0) AS recorded_costs FROM keys k)
     SELECT jsonb_build_object(
-     'sourceAvailable',to_regclass('hamdee_private.car_source_references') IS NOT NULL,
      'availability',coalesce((SELECT jsonb_agg(jsonb_build_object('vehicleId',v.id,'startDate',$4::text,'endDate',$5::text,
       'available',v.status='active' AND NOT EXISTS(SELECT 1 FROM hamdee_private.car_agreements a WHERE a.vehicle_id=v.id AND a.start_date<=$5::date AND a.end_date>=$4::date),
       'reason',CASE WHEN v.status<>'active' THEN v.status WHEN EXISTS(SELECT 1 FROM hamdee_private.car_agreements a WHERE a.vehicle_id=v.id AND a.start_date<=$5::date AND a.end_date>=$4::date) THEN 'rented' ELSE 'available' END,
@@ -135,9 +116,7 @@ export class CarRentalService {
      'expenses',coalesce((SELECT jsonb_agg(to_jsonb(e)-'event_id'-'amount'||jsonb_build_object('amount',e.amount::text) ORDER BY expense_date,id) FROM expenses e),'[]'::jsonb),
      'summary',coalesce((SELECT jsonb_agg(jsonb_build_object('vehicleId',vehicle_id,'currency',currency,'cashCollected',cash_collected::text,'pendingCheques',pending_cheques::text,'recordedCosts',recorded_costs::text,'recordedComparison',(cash_collected-recorded_costs)::text) ORDER BY vehicle_id,currency) FROM amounts),'[]'::jsonb),
      'history',coalesce((SELECT jsonb_agg(to_jsonb(e) ORDER BY occurred_at,id) FROM hamdee_private.ops_events e WHERE action LIKE 'cars:%' AND ($2::uuid IS NULL OR e.detail->'data'->>'vehicleId'=$2::text OR e.detail->'data'->>'id'=$2::text)),'[]'::jsonb)) AS data`,[asOf,vehicleId,period,availabilityStart,availabilityEnd])).rows[0].data;
-   const sourceAvailable=Boolean(data.sourceAvailable);
-   const sourceReferences=sourceAvailable?(await sql.query<OperationRow>('SELECT id,vehicle_id,source_key,source_reference,amount_reference FROM hamdee_private.car_source_references WHERE ($1::uuid IS NULL OR vehicle_id=$1) ORDER BY id',[vehicleId])).rows.map(operationView):[];
-   return {vehicles:(data.vehicles as OperationRow[]).map(operationView),agreements:(data.agreements as OperationRow[]).map(operationView),availability:data.availability,balances:data.balances,collections:(data.collections as OperationRow[]).map(operationView),expenses:(data.expenses as OperationRow[]).map(operationView),history:(data.history as OperationRow[]).map(operationView),summary:data.summary,sourceAvailable,sourceReferences,
+   return {vehicles:(data.vehicles as OperationRow[]).map(operationView),agreements:(data.agreements as OperationRow[]).map(operationView),availability:data.availability,balances:data.balances,collections:(data.collections as OperationRow[]).map(operationView),expenses:(data.expenses as OperationRow[]).map(operationView),history:(data.history as OperationRow[]).map(operationView),summary:data.summary,
     month:period,asOf,moneyUnit:'decimal-major-unit-strings',basis:'Monthly recorded cash/bank collections minus entered vehicle costs through asOf, separately by currency. Pending cheques are excluded from cash. This comparison is not profit, proration, a tariff or an automatic company ledger posting.'} as unknown as CarOverview;
   });
  }
@@ -147,7 +126,7 @@ export interface CarSourceReceipt extends SourceReceipt {vehicleId:string;vehicl
 export async function readCarReceipt(sql:Sql,receiptId:string):Promise<CarSourceReceipt|null>{
  if(!(await sql.query<{present:boolean}>("SELECT to_regclass('hamdee_private.car_receipts') IS NOT NULL AS present")).rows[0].present)return null;
  const r=(await sql.query<OperationRow>(`SELECT r.*,r.amount::text AS amount,a.customer_name,a.vehicle_snapshot FROM hamdee_private.car_receipts r JOIN hamdee_private.car_agreements a ON a.id=r.agreement_id WHERE r.id=$1`,[id(receiptId)])).rows[0];
- if(!r)return null;return {kind:'car-rental',id:String(r.id),date:day(r.received_date),amount:String(r.amount),currency:String(r.currency),method:r.method as CarSourceReceipt['method'],status:r.status as CarSourceReceipt['status'],classification:'car-rental',disposition:'unassigned',agreementId:String(r.agreement_id),customerLabel:String(r.customer_name),vehicleId:String(r.vehicle_id),vehicleRegistration:String((r.vehicle_snapshot as OperationRow).registration??'')};
+ if(!r)return null;return {kind:'car-rental',id:String(r.id),date:day(r.received_date),amount:String(r.amount),currency:String(r.currency),method:r.method as CarSourceReceipt['method'],status:r.status as CarSourceReceipt['status'],classification:'car-rental',disposition:'unassigned',agreementId:String(r.agreement_id),customerLabel:String(r.customer_name),vehicleId:String(r.vehicle_id),vehicleRegistration:String((r.vehicle_snapshot as OperationRow).registration)};
 }
 /** Inject this into existing StaffCollectionsService/CompanyFinanceService
  * constructors only during a separately authorized integration. Both existing
