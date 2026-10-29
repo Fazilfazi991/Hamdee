@@ -64,6 +64,7 @@ test('property rooms remain in the parent property workspace',async({page})=>{
 // reconciliation; Agent 4 exercises that separately against its frozen service.
 const collectorId='00000000-0000-4000-8000-000000000101',accountId='00000000-0000-4000-8000-000000000102',receiptId='00000000-0000-4000-8000-000000000103';
 async function staffContract(page:Page,write?:(route:Route,body:Record<string,unknown>,index:number)=>Promise<void>){
+  await page.route('**/api/hamdee/v1/capabilities',route=>route.fulfill({json:{data:{rentals:true,partners:false,staffCollections:true,companyFinance:true,personalFinance:false,carRentals:false}}}));
   const day=new Date().toISOString().slice(0,10),month=day.slice(0,7),commands:{body:Record<string,unknown>;key:string;csrf:string}[]=[];
   const collectors=[{id:collectorId,name:'Synthetic collector',phone:'Synthetic contact',notes:'',version:1}];
   const source={kind:'property-rent',id:receiptId,date:day,amount:'125.123456789123',currency:'AED',method:'cash',classification:'rent',status:'recorded',disposition:'unassigned',propertyLabel:'Synthetic villa',roomLabel:'Synthetic room',linked:false,companyAccountId:null};

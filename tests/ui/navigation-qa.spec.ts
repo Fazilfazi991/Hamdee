@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { startOwnerBrowserHarness } from '../support/owner-crm-harness';
 import { StaffCollectionsService } from '../../src/staff-collections';
-import { CompanyFinanceService } from '../../src/company-finance';
 
 // Independent navigation acceptance. Real loopback owner HTTP and PGlite;
 // no production flag, deployed environment, browser profile or auth shortcut.
@@ -18,7 +17,9 @@ test.afterEach(async () => { await server?.close(); server = undefined; });
 async function start(mode: 'ready' | 'absent' | 'no-schema' = 'ready') {
   server = await startOwnerBrowserHarness(mode === 'absent' ? { operationsFactory: () => ({}) } : {
     ...(mode === 'ready' ? { migrationFiles: ['006_local_operations_records.up.sql'] } : {}),
-    operationsFactory: properties => ({ staffCollections: new StaffCollectionsService(properties), companyFinance: new CompanyFinanceService(properties) })
+    // This suite deliberately registers Staff only; company/personal services
+    // are tested separately with their explicit server-owned scope.
+    operationsFactory: properties => ({ staffCollections: new StaffCollectionsService(properties) })
   }); return server;
 }
 async function credentials(page: Page, hash = '#dashboard') {
@@ -136,9 +137,9 @@ function gate() {
   const hold = new Promise<void>(resolve => { release = resolve; }), ready = new Promise<void>(resolve => { entered = resolve; }), done = new Promise<void>(resolve => { delivered = resolve; });
   return { hold, ready, done, release, entered, delivered };
 }
-async function holdStaff(page: Page) {
+async function holdCapabilities(page: Page) {
   const g = gate(); let delayed = false, status = 0;
-  await page.route('**/api/hamdee/v1/staff-collections?*', async (route: Route) => {
+  await page.route('**/api/hamdee/v1/capabilities', async (route: Route) => {
     if (delayed) { await route.continue(); return; } delayed = true;
     const response = await route.fetch(); status = response.status(); g.entered(); await g.hold;
     try { await route.fulfill({ response }); } catch { /* Aborted on logout is an expected outcome. */ } finally { g.delivered(); }
@@ -158,8 +159,8 @@ test('Navigation independent: real service without006 is not eligible for Staff 
   const response = await page.request.get(server!.url + api + '/staff-collections?month=2026-10&asOf=2026-10-16'); expect(response.status()).toBeGreaterThanOrEqual(400);
 });
 
-test('Navigation independent: Staff appears only after actual validated owner module GET completes', async ({ page }) => {
-  await start(); const held = await holdStaff(page);
+test('Navigation independent: Staff appears only after actual validated owner capability GET completes', async ({ page }) => {
+  await start(); const held = await holdCapabilities(page);
   try {
     await credentials(page); await held.ready; expect(held.status()).toBe(200);
     await expect(page.locator('#navigation a[href="#staff-collections"]')).toHaveCount(0);
@@ -171,7 +172,7 @@ test('Navigation independent: Staff appears only after actual validated owner mo
 });
 
 test('Navigation independent: malformed200 capability response cannot expose Staff as a working destination', async ({ page }) => {
-  await start(); await page.route('**/api/hamdee/v1/staff-collections?*', async route => {
+  await start(); await page.route('**/api/hamdee/v1/capabilities', async route => {
     const response = await route.fetch(); expect(response.status()).toBe(200);
     await route.fulfill({ status: 200, json: { data: { moneyUnit: 'unsupported', collectors: [] } } });
   }); await login(page); await noDeadSidebar(page, false);
@@ -246,7 +247,7 @@ test('Navigation independent: keyboard drawer navigation, Escape and focus retur
 });
 
 test('Navigation independent: late validated capability response after logout cannot resurrect Staff menu or protected context', async ({ page }) => {
-  await start(); const held = await holdStaff(page);
+  await start(); const held = await holdCapabilities(page);
   try {
     await credentials(page); await held.ready; expect(held.status()).toBe(200);
     await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await expect(page.getByLabel('Email', { exact: true })).toBeVisible();

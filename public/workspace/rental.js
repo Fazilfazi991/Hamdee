@@ -50,7 +50,7 @@ export async function renderRentalDashboard(target,options){
  const c={...options,target,dashboard:true,generation};context=c;
  target.innerHTML='<div role="status" class="empty">Loading saved rental balances…</div>';
  try{const data=await load(c);if(!alive(c)||!await c.verifyAccess()||!alive(c))return;c.data=data;target.innerHTML=filters(true)+totals(data);}
- catch(error){if(!alive(c))return;if(error.status===401||error.code==='MFA_REQUIRED'||error.code==='OWNER_ACCESS_DENIED')await c.onAccessLoss(error);else target.innerHTML=panel('Unable to load rental balances',esc(error.message),'','<button type="button" class="button subtle" data-action="retry-view">Retry balances</button>');}
+ catch(error){if(!alive(c))return;if(error.status===401||(error.status===403&&error.code!=='CSRF_REJECTED')||error.code==='MFA_REQUIRED'||error.code==='OWNER_ACCESS_DENIED')await c.onAccessLoss(error);else target.innerHTML=panel('Unable to load rental balances',esc(error.message),'','<button type="button" class="button subtle" data-action="retry-view">Retry balances</button>');}
 }
 export async function renderRental(target,options){
  const c={...options,target,dashboard:false,generation};context=c;
@@ -81,7 +81,7 @@ export async function renderRental(target,options){
    sectionPanel('advances','Unapplied advances','Earlier receipts remain available across months. Apply an advance explicitly to an issued due; this creates no new cash receipt. Security deposits stay separate.',table(['Room','Originally received','Tenant','Original advance','Available through '+report.asOf,'Action'],advances,'Cross-month advances'));
   const visible={rooms:['rooms'],tenants:['tenants'],agreements:['agreements','dues'],collections:['dues','collections','advances'],cheques:['collections'],deposits:['collections']}[c.section];
   target.querySelectorAll('[data-rental-section]').forEach(section=>section.hidden=Boolean(visible&&!visible.includes(section.dataset.rentalSection)));
- }catch(error){if(!alive(c))return;if(error.status===401||error.code==='MFA_REQUIRED'||error.code==='OWNER_ACCESS_DENIED')await c.onAccessLoss(error);else target.innerHTML=panel('Unable to load rental records',esc(error.message),'','<button type="button" class="button subtle" data-action="retry-view">Retry records</button>');}
+ }catch(error){if(!alive(c))return;if(error.status===401||(error.status===403&&error.code!=='CSRF_REJECTED')||error.code==='MFA_REQUIRED'||error.code==='OWNER_ACCESS_DENIED')await c.onAccessLoss(error);else target.innerHTML=panel('Unable to load rental records',esc(error.message),'','<button type="button" class="button subtle" data-action="retry-view">Retry records</button>');}
 }
 export const field=(name,label,type='text',value='',required=true,extra='',prefix='rental')=>`<div class="field"><label for="${prefix}-${name}">${label}</label><input id="${prefix}-${name}" name="${name}" type="${type}" value="${esc(value)}" ${required?'required':''} ${extra}></div>`;
 export const select=(name,label,values,selected='',required=true,prefix='rental')=>`<div class="field"><label for="${prefix}-${name}">${label}</label><select id="${prefix}-${name}" name="${name}" ${required?'required':''}><option value="">Choose…</option>${values.map(([value,label])=>`<option value="${esc(value)}" ${value===selected?'selected':''}>${esc(label)}</option>`).join('')}</select></div>`;
@@ -138,11 +138,11 @@ async function verifySession(button){
  const form=modal()?.querySelector('form'),save=form?.querySelector('#rental-save'),error=form?.querySelector('#rental-error');if(!form||!save||!error)return;
  state.verifying=true;button.disabled=true;save.disabled=true;form.setAttribute('aria-busy','true');error.textContent='Verifying session…';
  try{
-  const verified=await state.c.verifyAccess();if(dialogContext!==state||!alive(state.c)||!verified)return;
+  const verified=await (state.c.renewAccess||state.c.verifyAccess)();if(dialogContext!==state||!alive(state.c)||!verified)return;
   state.requiresVerification=false;button.remove();error.textContent='Session verified. Review your draft, then save explicitly.';error.focus();
  }catch(cause){
   if(dialogContext!==state||!alive(state.c))return;
-  if(cause.status===401||cause.code==='OWNER_ACCESS_DENIED'){await state.c.onAccessLoss(cause);return;}
+  if(cause.status===401||(cause.status===403&&cause.code!=='CSRF_REJECTED')||cause.code==='OWNER_ACCESS_DENIED'){await state.c.onAccessLoss(cause);return;}
   error.textContent=cause.message+' Your draft is retained. Verify session to retry.';error.focus();
  }finally{if(dialogContext===state&&alive(state.c)){state.verifying=false;button.disabled=false;save.disabled=Boolean(state.requiresVerification);form.setAttribute('aria-busy','false');}}
 }
@@ -162,7 +162,7 @@ document.addEventListener('submit',async event=>{
    report={...report,month:period};modal().close();modal().innerHTML='';dialogContext=null;
    await renderRental(state.c.target,{...state.c,quick:{...state.quick,period},prefetchedRental:{ok:true,value:result}});
    if(context&&alive(context))quickSummary(context,state.quick.roomId,period,'',state.trigger);
-  }catch(cause){if(dialogContext!==state||!alive(state.c))return;if(cause.status===401||cause.code==='OWNER_ACCESS_DENIED'){await state.c.onAccessLoss(cause);return;}error.textContent='The selected month could not be loaded. Your choice is retained; retry explicitly.';}
+  }catch(cause){if(dialogContext!==state||!alive(state.c))return;if(cause.status===401||(cause.status===403&&cause.code!=='CSRF_REJECTED')||cause.code==='OWNER_ACCESS_DENIED'){await state.c.onAccessLoss(cause);return;}error.textContent='The selected month could not be loaded. Your choice is retained; retry explicitly.';}
   finally{state.preparing=false;if(save.isConnected)save.disabled=false;}return;
  }
  let body={action:state.action,...state.hidden,...Object.fromEntries(new FormData(event.target))};
@@ -175,7 +175,7 @@ document.addEventListener('submit',async event=>{
  const controller=new window.AbortController();writeController=controller;const button=document.querySelector('#rental-save'),error=document.querySelector('#rental-error');button.disabled=true;error.textContent='';
  try{await state.c.api.rentalWrite(body,state.pending.key,controller.signal);if(dialogContext!==state||!alive(state.c)||controller.signal.aborted||!await state.c.verifyAccess()||!alive(state.c))return;
   writeController=null;modal().close();modal().innerHTML='';dialogContext=null;document.querySelector('#feedback').textContent=state.action==='allocate-advance'?'Advance applied to the selected due. No new cash receipt was created.':state.action==='record-collection'?'Receipt saved. Company cash or bank placement is a separate confirmed step in Company Finance.':state.action==='issue-due'?'Monthly rent due saved. No payment has been recorded.':state.action==='create-agreement'?'Agreement terms saved. A rent due and payment still require separate confirmation.':'Rental record saved.';await renderRental(state.c.target,state.c);if(state.quick&&context&&alive(context))quickSummary(context,state.quick.roomId,state.quick.period,state.quick.agreementId,state.trigger);
- }catch(cause){if(dialogContext!==state||!alive(state.c)||controller.signal.aborted)return;if(cause.status===401||cause.code==='MFA_REQUIRED'||cause.code==='OWNER_ACCESS_DENIED'){await state.c.onAccessLoss(cause);return;}
+ }catch(cause){if(dialogContext!==state||!alive(state.c)||controller.signal.aborted)return;if(cause.status===401||(cause.status===403&&cause.code!=='CSRF_REJECTED')||cause.code==='MFA_REQUIRED'||cause.code==='OWNER_ACCESS_DENIED'){await state.c.onAccessLoss(cause);return;}
   state.pending.uncertain=state.pending.uncertain||Boolean(cause.uncertain);event.target.querySelectorAll('input,select').forEach(input=>input.disabled=state.pending.uncertain);error.textContent=cause.message+(state.pending.uncertain?' Retry Save record to confirm the same submission.':'');
   if(cause.code==='CSRF_REJECTED'){
    state.requiresVerification=true;error.textContent+=' Verify session, review your retained draft, then save explicitly.';

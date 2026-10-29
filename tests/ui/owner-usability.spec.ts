@@ -92,6 +92,7 @@ test('a cancelled or rejected property route cannot expose prefetched rental rec
   await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await expect(page.getByLabel('Email', { exact: true })).toBeVisible(); expect(errors).toEqual([]);
 });
 test('authorized Staff records stay accessible while company account discovery is unavailable', async ({ page }) => {
+  await page.route('**/api/hamdee/v1/capabilities',route=>route.fulfill({json:{data:{rentals:true,partners:false,staffCollections:true,companyFinance:false,personalFinance:false,carRentals:false}}}));
   await page.route('**/api/hamdee/v1/staff-collections?*', route => route.fulfill({ json: { data: {
     moneyUnit: 'decimal-major-unit-strings', collectors: [], collections: [], handovers: [], totals: [], daily: [], history: []
   } } }));
@@ -104,9 +105,10 @@ test('authorized Staff records stay accessible while company account discovery i
   await expect(page.locator('#navigation a[href="#company"]')).toHaveCount(0);
   await page.locator('#navigation a[href="#staff-collections"]').click();
   await expect(page.getByRole('region', { name: 'Collector register', exact: true })).toBeVisible();
-  await expect(page.locator('#main')).toContainText('Synthetic company account connection unavailable.');
+  await expect(page.locator('#navigation button').filter({hasText:'Company Finance'})).toBeDisabled();
 });
 test('authorized module discovery starts before a slow dashboard and independent services become accessible', async ({ page }) => {
+  await page.route('**/api/hamdee/v1/capabilities',route=>route.fulfill({json:{data:{rentals:true,partners:false,staffCollections:false,companyFinance:false,personalFinance:false,carRentals:true}}}));
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   await page.route('**/api/hamdee/v1/operations-dashboard?*', async route => {
@@ -128,9 +130,9 @@ test('authorized module discovery starts before a slow dashboard and independent
 
 test('a transient module failure offers Retry and only a successful authorized contract activates the destination', async ({ page }) => {
   let attempts = 0;
-  await page.route('**/api/hamdee/v1/car-rentals?*', route => ++attempts === 1
+  await page.route('**/api/hamdee/v1/capabilities', route => ++attempts === 1
     ? route.fulfill({ status: 503, json: { error: { code: 'STORAGE_UNAVAILABLE', message: 'Temporary connection unavailable.' } } })
-    : route.fulfill({ json: { data: emptyCars } }));
+    : route.fulfill({ json: { data:{rentals:true,partners:false,staffCollections:false,companyFinance:false,personalFinance:false,carRentals:true} } }));
   await login(page);
   const menu = page.getByRole('button', { name: 'Open navigation', exact: true }); if (await menu.isVisible()) await menu.click();
   const retry = page.getByRole('navigation', { name: 'Main navigation', exact: true }).getByRole('button', { name: 'Car Rentals Retry', exact: true });

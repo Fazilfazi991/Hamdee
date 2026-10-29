@@ -8,7 +8,7 @@ export const operationFields=prefix=>({
  amount:(name,label,value='')=>field(name,label,'text',value,true,'inputmode="decimal" pattern="[0-9]{1,18}(\\.[0-9]{1,12})?"',prefix),
  confirm:(name,label)=>`<div class="field wide"><label class="operations-confirmation"><input type="checkbox" name="${name}" value="true" required> ${esc(label)}</label></div>`
 });
-const denied=error=>error.status===401||error.code==='OWNER_ACCESS_DENIED';
+const denied=error=>error.status===401||(error.status===403&&error.code!=='CSRF_REJECTED')||error.code==='OWNER_ACCESS_DENIED';
 export function createOwnerWorkspace(prefix){
  let current=null,dialogState=null,generation=0,reader=null,writer=null;
  const alive=c=>current===c&&c.generation===generation&&!c.signal.aborted&&c.isCurrent(),modal=()=>document.getElementById(prefix+'-dialog');
@@ -17,7 +17,9 @@ export function createOwnerWorkspace(prefix){
  function begin(target,options,label){
   const feedback=document.querySelector('#feedback');if(feedback)feedback.textContent='';
   if(!options?.api||!options.signal||typeof options.isCurrent!=='function'){target.innerHTML=panel(label+' unavailable','The reviewed service and owner workspace must be connected before recording operations.','');return null;}
-  reader?.abort();writer?.abort();writer=null;close(true);const controller=new window.AbortController();reader=controller;const c={...options,target,prefix,label,generation,signal:window.AbortSignal.any([options.signal,controller.signal])};current=c;target.setAttribute('aria-busy','true');target.innerHTML='<div class="empty" role="status">Loading saved '+esc(label.toLowerCase())+' records…</div>';return c;
+  reader?.abort();writer?.abort();writer=null;close(true);const controller=new window.AbortController();reader=controller;const c={...options,target,prefix,label,generation,signal:window.AbortSignal.any([options.signal,controller.signal])};current=c;
+  options.signal.addEventListener('abort',()=>{if(current===c)reset();},{once:true,signal:controller.signal});
+  target.setAttribute('aria-busy','true');target.innerHTML='<div class="empty" role="status">Loading saved '+esc(label.toLowerCase())+' records…</div>';return c;
  }
  async function read(c,load,draw){try{c.data=await load();if(!alive(c)||!await c.verifyAccess()||!alive(c))return;draw(c);}catch(error){if(!alive(c))return;if(denied(error))await c.onAccessLoss(error);else{
    c.target.innerHTML=panel(c.label+' unavailable',esc(error.message),'','<button type="button" class="button subtle" data-owner-retry>Retry loading</button>');
@@ -30,7 +32,7 @@ export function createOwnerWorkspace(prefix){
  }
  async function verify(state,control){
   if(dialogState!==state||!alive(state.c)||writer||state.verifying)return;state.verifying=true;control.disabled=true;const error=modal().querySelector('[data-owner-error]');error.textContent='Verifying session…';
-  try{if(await state.c.verifyAccess()&&dialogState===state&&alive(state.c)){state.requiresVerification=false;control.remove();error.textContent='Session verified. Review your draft, then save explicitly.';error.focus();}}
+  try{if(await (state.c.renewAccess||state.c.verifyAccess)()&&dialogState===state&&alive(state.c)){state.requiresVerification=false;control.remove();error.textContent='Session verified. Review your draft, then save explicitly.';error.focus();}}
   catch(cause){if(dialogState===state&&alive(state.c)){if(denied(cause))await state.c.onAccessLoss(cause);else error.textContent=cause.message+' Your draft is retained. Verify session to retry.';}}
   finally{if(dialogState===state&&alive(state.c)){state.verifying=false;control.disabled=false;modal().querySelector('[data-owner-save]').disabled=state.requiresVerification||state.loading;}}
  }

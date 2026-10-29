@@ -13,6 +13,7 @@ let staffWorkspace=null,staffReady=false,capabilityController=null;
 let carReady=false,companyReady=false,personalReady=false,carWorkspace=null,companyWorkspace=null,personalWorkspace=null;
 let partnerReady=false,partnerWorkspace=null;
 let moduleStates={};
+api.onAccessState=data=>{if(session&&managed)rememberAccess(data);};
 function resetOwnerOperations(){resetDailyDashboard();carWorkspace?.resetCarRentals();companyWorkspace?.resetCompanyFinance();personalWorkspace?.resetPersonalFinance();partnerWorkspace?.resetPartners();}
 // Retain HAMDEE's paper panels, brass actions, Inter and compact 4px rhythm.
 // Owner access has one primary action; property metadata keeps its existing hierarchy.
@@ -29,10 +30,10 @@ const expenseSections=['expenses','landlord','utilities','maintenance'];
 const settledRead=request=>request.then(value=>({ok:true,value}),error=>({ok:false,error}));
 function closeNavigation(returnFocus=false){$('#sidebar').classList.remove('open');$('.workspace').inert=false;document.body.classList.remove('navigation-open');$('.mobile-menu').setAttribute('aria-expanded','false');if(returnFocus)$('.mobile-menu').focus();}
 function invalidateForm(){writeController?.abort();writeController=null;formContext=null;pending=null;$('#dialog').close();$('#dialog-body').innerHTML='';$('#conflict-review').innerHTML='';$('#form-error').textContent='';$('#save-button').disabled=false;$('#property-form').removeAttribute('aria-busy');}
-function clearProtected(){closeNavigation();resetOwnerOperations();carReady=false;companyReady=false;personalReady=false;partnerReady=false;staffReady=false;moduleStates={};capabilityController?.abort();capabilityController=null;staffWorkspace?.resetStaffCollections();resetExpenses();resetRental();authGeneration++;routeSequence++;readController?.abort();authController?.abort();window.clearTimeout(expiryTimer);session=null;current=null;page=null;access=null;api.csrfToken=null;invalidateForm();$('#user-context').textContent='Not signed in';$('#logout-button').hidden=true;$('#recovery-button').hidden=true;document.querySelectorAll('#recovery-button,.topbar [data-action="refresh"]').forEach(button=>button.disabled=false);$('#feedback').textContent='';$('#mode-detail').textContent='Sign in to access saved records';}
+function clearProtected(){api.clearReads();closeNavigation();resetOwnerOperations();carReady=false;companyReady=false;personalReady=false;partnerReady=false;staffReady=false;moduleStates={};capabilityController?.abort();capabilityController=null;staffWorkspace?.resetStaffCollections();resetExpenses();resetRental();authGeneration++;routeSequence++;readController?.abort();authController?.abort();window.clearTimeout(expiryTimer);session=null;current=null;page=null;access=null;api.csrfToken=null;invalidateForm();$('#user-context').textContent='Not signed in';$('#logout-button').hidden=true;$('#recovery-button').hidden=true;document.querySelectorAll('#recovery-button,.topbar [data-action="refresh"]').forEach(button=>button.disabled=false);$('#feedback').textContent='';$('#mode-detail').textContent='Sign in to access saved records';}
 function beginRead(){readController?.abort();readController=new window.AbortController();routeSequence++;return readController;}
 const validRead=(seq,controller)=>seq===routeSequence&&!controller.signal.aborted;
-const accessLost=error=>error.status===401||error.code==='OWNER_ACCESS_DENIED';
+const accessLost=error=>error.status===401||(error.status===403&&error.code!=='CSRF_REJECTED')||error.code==='OWNER_ACCESS_DENIED';
 function showUnavailable(title,message){$('#main').innerHTML=unavailable(title,message);$('#main').setAttribute('aria-busy','false');}
 function rememberAccess(data){
   access=api.rememberState(data);window.clearTimeout(expiryTimer);
@@ -86,6 +87,12 @@ async function showAccessLoss(error){
   try{const result=await api.authState(controller.signal);if(!validRead(seq,controller))return;managed=true;rememberAccess(result.data);renderAccess(error.message);}
   catch(failure){if(!validRead(seq,controller))return;showUnavailable(failure.status===404?'Sign-in required':'Backend unavailable',failure.status===404?error.message:failure.message);}
 }
+function acceptAuthorizedResponse(){
+  if(!session)return false;
+  if(!managed)return true;
+  if(access?.state==='authenticated'&&(access.expiresAt===null||access.expiresAt>Date.now()))return true;
+  clearProtected();renderAccess('Your session has expired. Check your session to sign in again.');return false;
+}
 async function syncAccess(signal){
   if(!managed)return true;
   const result=await api.authState(signal);if(signal?.aborted)return false;rememberAccess(result.data);
@@ -102,7 +109,7 @@ async function runAccount(action,body={},form=null){
     if(result.data.state==='authenticated'){
       rememberAccess(result.data);
       if(action==='login')window.history.replaceState(null,'',window.location.pathname+window.location.search+'#dashboard');
-      authController=null;await boot();return;
+      authController=null;await boot(result.data);return;
     }
     clearProtected();managed=true;recoveryView=false;rememberAccess(result.data);renderAccess();
     if(access.state==='anonymous')$('#owner-email')?.focus();
@@ -174,42 +181,37 @@ function navigation(){
 }
 async function discoverOperations(){
   if(!session||!managed)return;capabilityController?.abort();const controller=new window.AbortController(),generation=authGeneration;capabilityController=controller;
-  const asOf=new Date().toISOString().slice(0,10),month=asOf.slice(0,7),valid=()=>generation===authGeneration&&!controller.signal.aborted&&Boolean(session);
-  const arrays=(data,keys)=>data?.moneyUnit==='decimal-major-unit-strings'&&keys.every(key=>Array.isArray(data[key]));
-  const scoped=(data,scope)=>arrays(data,['accounts','transferAccounts','totals','entries','monthEntries'])&&data.scope===scope&&data.accounts.every(row=>row.scope===scope);
-  const outcomes={};
-  const tasks=[['staff-collections',()=>api.staffRead({month,asOf},controller.signal),data=>arrays(data,['collectors','collections','handovers','totals','daily','history'])],['company',()=>api.financeRead({month,asOf},controller.signal),data=>scoped(data,'company')],['personal-finance',()=>api.personalRead({month,asOf},controller.signal),data=>scoped(data,'personal')],['car-rentals',()=>api.carRead({month,asOf},controller.signal),data=>arrays(data,['vehicles','agreements','availability','balances','collections','expenses','history','summary'])],['partners',()=>api.partnerRead({month,asOf,limit:1},controller.signal),data=>arrays(data,['partners','links','entries','history','summary','currencies'])]];
-  for(const [id] of tasks){outcomes[id]={state:'loading',data:null};moduleStates[id]='loading';}navigation();
-  const update=()=>{
-    if(!valid())return;
-    companyReady=outcomes.company.state==='ready';personalReady=outcomes['personal-finance'].state==='ready';carReady=outcomes['car-rentals'].state==='ready';partnerReady=outcomes.partners.state==='ready';
-    // Staff records have their own authorized service. Company account choices
-    // are verified separately by the handover form; a slow finance probe must
-    // not hide otherwise available collector records and custody history.
-    staffReady=outcomes['staff-collections'].state==='ready';
-    for(const [id] of tasks)moduleStates[id]=outcomes[id].state;
-    navigation();
-  };
-  try{await Promise.allSettled(tasks.map(async([id,read,accept])=>{
-    try{const result=await read();if(!valid())return;
-      if(!accept(result.data)){outcomes[id]={state:'retry',data:null};update();return;}
-      if(!await syncAccess(controller.signal)||!valid())return;
-      outcomes[id]={state:'ready',data:result.data};update();
-    }catch(error){if(!valid())return;if(accessLost(error)){await showAccessLoss(error);return;}
-      const blocked=[401,403].includes(error.status)||['CONFIGURATION_UNAVAILABLE','ENVIRONMENT_MISMATCH'].includes(error.code);
-      outcomes[id]={state:blocked?'unavailable':'retry',data:null};update();
-    }
-  }));}
+  const valid=()=>generation===authGeneration&&!controller.signal.aborted&&Boolean(session);
+  const modules=[['staff-collections','staffCollections'],['company','companyFinance'],['personal-finance','personalFinance'],['car-rentals','carRentals'],['partners','partners']];
+  for(const [id] of modules)moduleStates[id]='loading';navigation();
+  try{
+    const result=await api.capabilities(controller.signal);if(!valid()||!acceptAuthorizedResponse())return;
+    const d=result.data;
+    if(!d||modules.some(([,key])=>typeof d[key]!=='boolean'))throw new Error('The service returned unsupported module availability.');
+    staffReady=d.staffCollections;companyReady=d.companyFinance;personalReady=d.personalFinance;carReady=d.carRentals;partnerReady=d.partners;
+    for(const [id,key] of modules)moduleStates[id]=d[key]?'ready':'unavailable';navigation();
+  }catch(error){if(valid()){if(accessLost(error))await showAccessLoss(error);else{
+    staffReady=false;carReady=false;companyReady=false;personalReady=false;partnerReady=false;
+    const blocked=[401,403].includes(error.status)||['CONFIGURATION_UNAVAILABLE','ENVIRONMENT_MISMATCH'].includes(error.code);
+    for(const [id] of modules)moduleStates[id]=blocked?'unavailable':'retry';navigation();
+  }}}
   finally{if(capabilityController===controller)capabilityController=null;}
 }
-async function boot(){
+async function boot(authState=null){
   clearProtected();recoveryView=false;managed=null;const controller=beginRead(),seq=routeSequence;navigation();$('#main').innerHTML='<div class="empty" role="status"><h2>Checking secure access…</h2></div>';$('#main').setAttribute('aria-busy','true');
-  try{const result=await api.session(controller.signal);if(!validRead(seq,controller))return;
-    try{const state=await api.authState(controller.signal);if(!validRead(seq,controller))return;managed=true;rememberAccess(state.data);if(access.state!=='authenticated'){renderAccess();return;}}
-    catch(error){if(error.status!==404)throw error;managed=false;}
-    if(!validRead(seq,controller))return;session=result.data;$('#user-context').innerHTML=`<strong>${e(managed?'HAMDEE owner':session.name)}</strong><small>${managed?'Owner account':e(session.roles.join(' · '))}</small>`;
+  try{
+    const result=await api.session(controller.signal);if(!validRead(seq,controller))return;
+    const projected=result.access||authState;
+    if(projected){managed=true;rememberAccess(projected);if(access.state!=='authenticated'){renderAccess();return;}}
+    else{
+      try{const state=await api.authState(controller.signal);if(!validRead(seq,controller))return;managed=true;rememberAccess(state.data);if(access.state!=='authenticated'){renderAccess();return;}}
+      catch(error){if(error.status!==404)throw error;managed=false;}
+    }
+    if(!validRead(seq,controller))return;
+    session=result.data;$('#user-context').innerHTML=`<strong>${e(managed?'HAMDEE owner':session.name)}</strong><small>${managed?'Owner account':e(session.roles.join(' · '))}</small>`;
     $('#mode-detail').textContent=isolatedDemo?'DEMO owner · Isolated synthetic records':session.authenticationProvider==='automated-test'?'Automated test identity · Synthetic records only':'Owner access · Saved records';
-    const initialRender=render();if(session&&managed)void discoverOperations();await initialRender;
+    if(session&&managed)void discoverOperations();
+    await render();
   }catch(error){if(!validRead(seq,controller))return;if(accessLost(error))await showAccessLoss(error);else{clearProtected();showUnavailable('Backend unavailable',error.message);}}
   finally{if(validRead(seq,controller))$('#main').setAttribute('aria-busy','false');}
 }
@@ -219,22 +221,22 @@ function propertyEmpty(){
 }
 function table(rows){return `<div class="table-wrap" tabindex="0" role="region" aria-label="Property records"><table class="data-table"><thead><tr><th scope="col">Property</th><th scope="col">Location</th><th scope="col">Record status</th><th scope="col">Revision</th><th scope="col">Updated</th></tr></thead><tbody>${rows.map(p=>`<tr><td><button class="record-name" data-action="detail" data-id="${e(p.id)}">${e(p.name)}</button><span class="record-sub">${e(p.id)}</span></td><td>${e(p.location||'Not provided')}</td><td><span class="badge ${p.lifecycleStatus==='archived'?'amber':'green'}">${e(p.lifecycleStatus)}</span></td><td>${p.version}</td><td>${e(date(p.updatedAt))}</td></tr>`).join('')}</tbody></table></div>`;}
 async function render(){
-  const route=window.location.hash.slice(1)||'dashboard',sameProperty=route.startsWith('properties/')&&current?.id===route.split('/')[1];
-  staffWorkspace?.resetStaffCollections();resetOwnerOperations();
-  resetExpenses(sameProperty);resetRental(sameProperty);invalidateForm();const controller=beginRead(),seq=routeSequence;navigation();if(!session){if(access)renderAccess();else await boot();return;}$('#main').setAttribute('aria-busy','true');
+  const route=window.location.hash.slice(1)||'dashboard';
+  // Route cancellation invalidates inactive modules; retain their selected filters.
+  resetExpenses(true);resetRental(true);invalidateForm();const controller=beginRead(),seq=routeSequence;navigation();if(!session){if(access)renderAccess();else await boot();return;}$('#main').setAttribute('aria-busy','true');
   const main=$('#main');
   main.classList.toggle('business-overview-page',route==='dashboard');
-  main.innerHTML='<div class="empty" role="status"><h2>Loading authorized records…</h2></div>';
+  main.innerHTML=heading(nav.find(n=>n[0]===route.split('/')[0])?.[1]||'Villa workspace','Loading current authorized records…')+'<div class="empty" role="status">Loading this section…</div>';
   try{
     if(route==='partners'&&managed){
       current=null;page=null;main.innerHTML=heading('Partners & Investments','Contacts, property links and recorded movements')+'<div id="partner-workspace"></div>';
       const module=await import('./partners.js');if(!validRead(seq,controller))return;partnerWorkspace=module;
-      await module.renderPartners($('#partner-workspace'),{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
+      await module.renderPartners($('#partner-workspace'),{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:acceptAuthorizedResponse,renewAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
     }else if(['staff-collections','car-rentals','company','personal-finance'].includes(route)&&managed){
       current=null;page=null;main.innerHTML=heading(nav.find(n=>n[0]===route)[1],'Owner workspace · Saved records only')+'<div id="operations-workspace"></div>';
-      if(route==='staff-collections'){const module=await import('./staff-collections.js');if(!validRead(seq,controller))return;staffWorkspace=module;await module.renderStaffCollections($('#operations-workspace'),{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});}
+      if(route==='staff-collections'){const module=await import('./staff-collections.js');if(!validRead(seq,controller))return;staffWorkspace=module;await module.renderStaffCollections($('#operations-workspace'),{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:acceptAuthorizedResponse,renewAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});}
       else{
-        const options={api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss};
+        const options={api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:acceptAuthorizedResponse,renewAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss};
         if(route==='car-rentals'){const module=await import('./car-rentals.js');if(!validRead(seq,controller))return;carWorkspace=module;await module.renderCarRentals($('#operations-workspace'),options);}
         else if(route==='personal-finance'){const module=await import('./personal-finance.js');if(!validRead(seq,controller))return;personalWorkspace=module;await module.renderPersonalFinance($('#operations-workspace'),options);}
         else{const module=await import('./company-finance.js');if(!validRead(seq,controller))return;companyWorkspace=module;await module.renderCompanyFinance($('#operations-workspace'),options);}
@@ -247,25 +249,25 @@ async function render(){
         const period=expenseReportPeriod();
         prefetchedExpenses=settledRead(Promise.all([api.expenseRead({...period,propertyId:id},controller.signal),api.rentalRead({...period,propertyId:id},controller.signal)]));
       }
-      const result=await propertyRequest;if(!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;current=result.data;
+      const result=await propertyRequest;if(!validRead(seq,controller)||!acceptAuthorizedResponse()||!validRead(seq,controller))return;current=result.data;
       const p=current;main.innerHTML=heading(p.name,'Property details, rentals and operating history',btn('Back to properties','back')+(can('update')&&p.lifecycleStatus!=='archived'?btn('Edit property','edit','primary'):'')+(can('archive')&&p.lifecycleStatus!=='archived'?btn('Archive','archive','danger'):'')+(can('restore')&&p.lifecycleStatus==='archived'?btn('Restore','restore','primary'):''))+
         `<section class="panel"><div class="detail-meta"><div><small>Internal ID</small><strong>${e(p.id)}</strong></div><div><small>Record lifecycle</small><strong>${e(p.lifecycleStatus)}</strong></div><div><small>Revision</small><strong>${p.version}</strong></div></div></section><div class="tabs" aria-label="Villa workspace"><button class="tab ${section==='overview'?'active':''}" data-action="overview">Overview</button>${managed?`<button class="tab ${rentalSections.includes(section)?'active':''}" data-action="rental">Rooms &amp; rentals</button><button class="tab ${expenseSections.includes(section)?'active':''}" data-action="property-expenses">Expenses &amp; maintenance</button>`:''}${can('audit')?`<button class="tab ${section==='history'?'active':''}" data-action="audit">Audit history</button>`:''}</div><section class="panel" id="detail-content"><div class="panel-header"><div><h2>Property metadata</h2><p>Archival changes record visibility only.</p></div></div><dl class="summary-list">${[['Name',p.name],['Location',p.location||'Not provided'],['Counterparty reference',p.counterpartyId||'Not assigned'],['Created',date(p.createdAt)],['Created by',p.createdBy],['Updated',date(p.updatedAt)],['Updated by',p.updatedBy],...(p.archivedAt?[['Archived',date(p.archivedAt)],['Archived by',p.archivedBy],['Archive reason',p.archiveReason]]:[])].map(([a,b])=>`<div><dt>${e(a)}</dt><dd>${e(b)}</dd></div>`).join('')}</dl></section>`;
-      const options={api,property:p,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss};
+      const options={api,property:p,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:acceptAuthorizedResponse,renewAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss};
       if(managed&&rentalSections.includes(section))await renderRental($('#detail-content'),{...options,section:section==='rental'?null:section,prefetchedRental});
       else if(managed&&expenseSections.includes(section))await renderExpenses($('#detail-content'),{...options,section:section==='expenses'?null:section,prefetchedExpenses});
       else if(section==='history'&&can('audit'))await renderPropertyHistory(p.id,controller,seq);
     }else if(route==='dashboard'&&managed){
       current=null;page=null;main.innerHTML='<div id="daily-dashboard"></div>';
       // One aggregated operations read; villa lists remain in Villas & Properties.
-      await renderDailyDashboard($('#daily-dashboard'),{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
+      await renderDailyDashboard($('#daily-dashboard'),{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:acceptAuthorizedResponse,renewAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
     }else if(['expenses','maintenance','reports'].includes(route)&&managed){
       current=null;page=null;main.innerHTML=heading(route==='reports'?'Monthly property report':route==='maintenance'?'Property maintenance':'Property expenses','Private owner records · Saved property costs and payments.')+'<div id="expense-workspace"></div>';
-      await renderExpenses($('#expense-workspace'),{api,summaryOnly:route==='reports',signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
+      await renderExpenses($('#expense-workspace'),{api,summaryOnly:route==='reports',signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:acceptAuthorizedResponse,renewAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
     }else if(['tenants','collections','cheques'].includes(route)&&managed){
       current=null;page=null;main.innerHTML=heading(route==='tenants'?'Rooms, tenants & agreements':route==='cheques'?'Cheque register':'Rent collections','Private owner records · Saved room-level records.')+'<div id="rental-workspace"></div>';
-      await renderRental($('#rental-workspace'),{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
+      await renderRental($('#rental-workspace'),{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:acceptAuthorizedResponse,renewAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
     }else if(route==='dashboard'||route==='properties'){
-      const result=await api.list(filters,controller.signal);if(!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;page=result;current=null;
+      const result=await api.list(filters,controller.signal);if(!validRead(seq,controller)||!acceptAuthorizedResponse()||!validRead(seq,controller))return;page=result;current=null;
       main.innerHTML=heading(route==='dashboard'?'Property overview':'Properties','Open a property to manage its rooms, tenants and collections.',can('create')?btn('Add property','create','primary'):'')+
         (route==='dashboard'?`<div class="metrics"><div class="metric"><div class="metric-top"><span>Properties on this page</span>${icon('properties')}</div><div class="metric-value">${result.data.length}</div><p class="metric-note">Authorized records · Current filters</p></div>${['Rental income','Partner returns','Company income'].map(t=>`<div class="metric"><div class="metric-top"><span>${t}</span></div><div class="metric-value unavailable-metric">Unavailable</div><p class="metric-note">Financial module not enabled</p></div>`).join('')}</div>`:'')+
         `<section class="panel"><div class="panel-header"><div><h2>Property register</h2><p>No rental, funding or ownership terms are inferred.</p></div></div><form id="filters" class="toolbar"><label class="search-field">${icon('search')}<input name="q" aria-label="Search properties" placeholder="Search name or location…" value="${e(filters.q)}" maxlength="200"></label><select name="archiveState" class="filter-select" aria-label="Record status">${[['active','Active records'],['archived','Archived records'],['all','All records']].map(([v,l])=>`<option value="${v}" ${filters.archiveState===v?'selected':''}>${l}</option>`).join('')}</select><button class="button subtle" type="submit">Apply filters</button></form>${result.data.length?table(result.data):propertyEmpty()}<div class="table-foot"><span>${result.data.length} records on this page</span>${result.nextCursor?btn('Next page','next'):''}${filters.cursor?btn('First page','first'):''}</div></section>`;
@@ -274,7 +276,7 @@ async function render(){
   finally{if(validRead(seq,controller))main.setAttribute('aria-busy','false');}
 }
 async function renderPropertyHistory(id,controller,seq){
-  try{const result=await api.audit(id,'',controller.signal);if(current?.id!==id||!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;$('#detail-content').innerHTML=`<div class="panel-header"><div><h2>Audit history</h2><p>Attributed metadata changes · No confidential payload dumps</p></div></div><div class="table-wrap" tabindex="0" role="region" aria-label="Property audit history"><table class="data-table"><thead><tr>${['Revision','Action','Actor','Reason','Time'].map(label=>`<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${result.data.map(a=>`<tr><td>${a.version}</td><td>${e(a.action)}</td><td>${e(a.actorId)}</td><td>${e(a.reason||'—')}</td><td>${e(date(a.occurredAt))}</td></tr>`).join('')}</tbody></table></div>${result.nextCursor?'<p class="muted-help">More history is available through the paginated API.</p>':''}`;}
+  try{const result=await api.audit(id,'',controller.signal);if(current?.id!==id||!validRead(seq,controller)||!acceptAuthorizedResponse()||!validRead(seq,controller))return;$('#detail-content').innerHTML=`<div class="panel-header"><div><h2>Audit history</h2><p>Attributed metadata changes · No confidential payload dumps</p></div></div><div class="table-wrap" tabindex="0" role="region" aria-label="Property audit history"><table class="data-table"><thead><tr>${['Revision','Action','Actor','Reason','Time'].map(label=>`<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${result.data.map(a=>`<tr><td>${a.version}</td><td>${e(a.action)}</td><td>${e(a.actorId)}</td><td>${e(a.reason||'—')}</td><td>${e(date(a.occurredAt))}</td></tr>`).join('')}</tbody></table></div>${result.nextCursor?'<p class="muted-help">More history is available through the paginated API.</p>':''}`;}
   catch(error){if(!validRead(seq,controller))return;if(accessLost(error))await showAccessLoss(error);else $('#detail-content').innerHTML=unavailable('Audit unavailable',error.message);}
 }
 function propertySection(section){const hash='properties/'+current.id+(section?'/'+section:'');if(window.location.hash==='#'+hash)void render();else window.location.hash=hash;}
@@ -334,7 +336,7 @@ document.addEventListener('click',async event=>{
   if(action==='review-latest'){
     const c=formContext,generation=authGeneration;if(!c)return;
     const controller=beginRead();
-    try{const result=await api.get(c.property.id,controller.signal);if(formContext!==c||generation!==authGeneration||controller.signal.aborted)return;if(!await syncAccess(controller.signal)||formContext!==c)return;c.property=result.data;pending=null;$('#dialog-body').querySelectorAll('input,textarea,select').forEach(input=>input.disabled=false);$('#conflict-review').innerHTML=`<p>Latest revision ${result.data.version}: ${e(result.data.name)} · ${e(result.data.location||'No location')}. Your draft remains above. Review it before saving.</p>`;}
+    try{const result=await api.get(c.property.id,controller.signal);if(formContext!==c||generation!==authGeneration||controller.signal.aborted)return;if(!acceptAuthorizedResponse()||formContext!==c)return;c.property=result.data;pending=null;$('#dialog-body').querySelectorAll('input,textarea,select').forEach(input=>input.disabled=false);$('#conflict-review').innerHTML=`<p>Latest revision ${result.data.version}: ${e(result.data.name)} · ${e(result.data.location||'No location')}. Your draft remains above. Review it before saving.</p>`;}
     catch(error){if(formContext!==c||generation!==authGeneration||controller.signal.aborted)return;if(accessLost(error))await showAccessLoss(error);else if(error.status===404){current=null;invalidateForm();showUnavailable('Property unavailable',error.message);}else $('#form-error').textContent=error.message;}return;
   }
   if(action==='property-expenses'){

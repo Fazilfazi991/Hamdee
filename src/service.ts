@@ -17,6 +17,7 @@ export interface PropertyDashboard {
   readonly archivedProperties:number;
   readonly recentProperties:readonly Row[];
 }
+export interface ModuleRegistrations {staffCollections:boolean;companyFinance:boolean;personalFinance:boolean;carRentals:boolean}
 const iso = (v: unknown) => v instanceof Date ? v.toISOString() : v;
 function profile(row: Row): Row {
   return { id:row.id, name:row.name, location:row.location, counterpartyId:row.counterparty_id,
@@ -68,14 +69,27 @@ export class PropertyService {
       await recheckIdentity(identity);return result;
     });
   }
-  async session(identity: Identity,ownerOnly=false) {
-    return this.context(identity,'read',async ({user,grants})=>{
+  async session(identity: Identity,ownerOnly=false,registered?:ModuleRegistrations) {
+    return this.context(identity,'read',async ({sql,user,grants})=>{
       // Optional-module request preflight uses this same current membership
       // transaction instead of opening a second empty ownerContext transaction.
       // The module's own transaction and live precommit recheck still run.
       if(ownerOnly)requireThat(grants.some(g=>g.role==='admin'&&g.portfolio),403,'OWNER_ACCESS_DENIED','Owner access is required.');
+      // Discovery reads schema names only, never five financial overviews. The
+      // result is informational: every subsequent operation authorizes afresh.
+      let modules;
+      if(registered){
+        const present=new Set((await sql.query<{tablename:string}>("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname='hamdee_private'")).rows.map(r=>r.tablename));
+        const has=(names:string[])=>names.every(name=>present.has(name));
+        const rentals=has(['rooms','tenants','rental_agreements','rent_dues','rent_collections','rent_allocations','rental_events']);
+        const finance=has(['ops_accounts','ops_money','ops_receipts','ops_transfers','ops_claims','ops_commands','ops_events']);
+        const cars=has(['car_vehicles','car_agreements','car_receipts','car_expenses']);
+        modules={rentals,partners:has(['partners','partner_revisions','property_partners','partner_entries','partner_entry_corrections','partner_events','partner_commands']),
+          staffCollections:registered.staffCollections&&rentals&&finance&&has(['ops_collectors','ops_collections','ops_collection_reversals']),
+          companyFinance:registered.companyFinance&&finance,personalFinance:registered.personalFinance&&finance,carRentals:registered.carRentals&&finance&&cars};
+      }
       return {id:user.id,name:user.display_name,roles:[...new Set(grants.map(g=>g.role))],
-        capabilities:[...new Set(grants.flatMap(g=>(['read','create','update','archive','restore','audit'] as Capability[]).filter(c=>permits(g,c))))]};
+        capabilities:[...new Set(grants.flatMap(g=>(['read','create','update','archive','restore','audit'] as Capability[]).filter(c=>permits(g,c))))],...(modules?{modules}:{})};
     });
   }
   private async getRow(ctx:Context,id:string):Promise<Row> {

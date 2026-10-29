@@ -41,8 +41,17 @@ export function createHandler(provider:IdentityProvider,service:PropertyService,
       // Also validate enabled membership before parsing untrusted mutation fields.
       // For operational modules, the full owner portfolio grant is checked in
       // this same transaction; it is never inferred from a role name alone.
-      const session=await service.session(identity,Object.hasOwn(modules,moduleName)||moduleName==='partners'||moduleName==='operations-dashboard');
+      const discovery=path==='/capabilities';
+      const session=await service.session(identity,discovery||Object.hasOwn(modules,moduleName)||moduleName==='partners'||moduleName==='operations-dashboard',discovery?{
+        staffCollections:!!operations.staffCollections,companyFinance:!!operations.companyFinance,
+        personalFinance:!!operations.personalFinance,carRentals:!!operations.carRentals
+      }:undefined);
       requireThat(url.pathname===base||url.pathname.startsWith(base+'/'),404,'NOT_FOUND','Endpoint not found.');
+      if(discovery){
+        requireThat(request.method==='GET',405,'METHOD_NOT_ALLOWED','This method is unavailable.');
+        requireThat(!url.search,400,'INVALID_QUERY','Capability discovery does not accept filters.');
+        return json({data:session.modules});
+      }
       if(path==='/session'&&request.method==='GET') return json({data:{...session,authenticationProvider:provider.kind||'server-validated'}});
       if(moduleName==='operations-dashboard'){
         requireThat(path==='/operations-dashboard',404,'NOT_FOUND','Endpoint not found.');

@@ -12,6 +12,57 @@ import { bindIdentityRecheck } from '../src/auth';
 import { ApiError } from '../src/errors';
 import { guardHostedTransaction,HAMDEE_DEVELOPMENT_PROJECT } from '../src/hosted-database';
 
+import { createOwnerQaFixture } from './support/owner-crm-harness';
+
+test('Performance: module discovery uses one authorized schema read and no operational overviews',async t=>{
+  const f=await operationsFixture();t.after(()=>f.pg.close());
+  const db=adapter(f.pg);let transactions=0,statements=0,calls=0;
+  const counted:Database={transaction<T>(work:(sql:Sql)=>Promise<T>){transactions++;return db.transaction(sql=>work({
+    async query<R>(text:string,params?:unknown[]){statements++;return sql.query<R>(text,params);}
+  }));}};
+  const properties=new PropertyService(counted,f.identity);
+  const module={async overview(){calls++;return {};},async mutate(){calls++;return {};}};
+  const handle=createHandler(f.provider,properties,()=>{},{staffCollections:module,companyFinance:module,personalFinance:module,carRentals:module});
+  const response=await handle(new Request('http://127.0.0.1:4181/api/hamdee/v1/capabilities',{headers:{authorization:'Bearer '+f.users.admin.token}}));
+  assert.equal(response.status,200);assert.deepEqual((await response.json()).data,{rentals:true,partners:false,staffCollections:true,companyFinance:true,personalFinance:true,carRentals:false});
+  assert.equal(transactions,1);assert.equal(statements,7);assert.equal(calls,0);
+  for(const user of ['disabled','scopedAdmin','reader','ops','finance']){
+    const denied=await handle(new Request('http://127.0.0.1:4181/api/hamdee/v1/capabilities',{headers:{authorization:'Bearer '+f.users[user].token}}));
+    // This service is pinned to the owner: other subjects are rejected before
+    // their database disabled/scoped status can be disclosed.
+    assert.equal(denied.status,403);assert.equal((await denied.json()).data,undefined);
+  }
+  assert.equal(calls,0);
+});
+
+test('Performance: diagnostic counters remain request-local and expose only fixed numeric timings',async t=>{
+  const f=await createOwnerQaFixture();t.after(()=>f.close());await f.login();
+  const [dashboard,session]=await Promise.all([f.request('GET','/api/hamdee/v1/dashboard'),f.request('GET','/api/hamdee/v1/session')]);
+  for(const response of [dashboard,session]){
+    assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'private, no-store');
+    assert.match(response.headers.get('server-timing')??'',/^owner;dur=\d+\.\d, auth;dur=\d+\.\d, database;dur=\d+\.\d, sql;dur=\d+\.\d, db_tx;desc="\d+", db_query;desc="\d+"$/);
+    assert.ok(response.headers.has('set-cookie'));
+  }
+  assert.match(dashboard.headers.get('server-timing')!,/db_tx;desc="2", db_query;desc="14"$/);
+  assert.match(session.headers.get('server-timing')!,/db_tx;desc="1", db_query;desc="6"$/);
+  const denied=await f.request('GET','/api/hamdee/v1/capabilities?unexpected=1');
+  assert.equal(denied.status,400);assert.equal(denied.headers.get('server-timing'),null);
+});
+
+test('Performance: authorized responses carry current idle expiry and CSRF without another state read',async t=>{
+  const f=await createOwnerQaFixture();t.after(()=>f.close());await f.login();
+  const first=await f.request('GET','/api/hamdee/v1/session');assert.equal(first.status,200);
+  const before=Number(first.headers.get('x-hamdee-session-expires-at'));assert.ok(Number.isSafeInteger(before)&&before>f.clock.now());
+  assert.equal(first.headers.get('x-hamdee-csrf'),f.jar.csrfToken);
+  f.clock.advance(1000);
+  const active=await f.request('GET','/api/hamdee/v1/dashboard');assert.equal(active.status,200);
+  assert.equal(Number(active.headers.get('x-hamdee-session-expires-at')),before+1000);
+  assert.equal(active.headers.get('x-hamdee-csrf'),f.jar.csrfToken);
+  await f.pg!.query('UPDATE hamdee_private.app_users SET enabled=false WHERE id=$1',[f.member!.id]);
+  const denied=await f.request('GET','/api/hamdee/v1/session');assert.equal(denied.status,401);
+  assert.equal(denied.headers.get('x-hamdee-session-expires-at'),null);assert.equal(denied.headers.get('x-hamdee-csrf'),null);
+});
+
 test('Performance: optional-module preflight validates full owner membership once, retaining operation and live checks',async t=>{
   const f=await operationsFixture();t.after(()=>f.pg.close());
   const db=adapter(f.pg);let transactions=0,statements=0,liveChecks=0;

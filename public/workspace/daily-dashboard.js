@@ -104,7 +104,7 @@ async function read(c){
   if(!await c.verifyAccess()){if(live(c))clear(c);return;}if(!live(c))return;
   paint(c,validate(result,c));
  }catch(error){
-  if(!live(c))return;if(error.status===401||error.code==='OWNER_ACCESS_DENIED'){clear(c);await c.onAccessLoss(error);return;}
+  if(!live(c))return;if(error.status===401||(error.status===403&&error.code!=='CSRF_REJECTED')||error.code==='OWNER_ACCESS_DENIED'){clear(c);await c.onAccessLoss(error);return;}
   c.target.innerHTML='<section class="overview-loading" role="status"><span class="eyebrow">HAMDEE · DAILY OPERATIONS</span><h1>Business Overview</h1><h2>Saved overview unavailable</h2><p>Your villas and existing modules remain available. No unverified balances are shown.</p><button class="button subtle" type="button" data-daily-retry>Retry business overview</button><a class="button subtle" href="#properties">Open Villas &amp; Properties</a></section>';c.target.querySelector('[data-daily-retry]').addEventListener('click',()=>{if(live(c))void read(c);});
  }finally{if(live(c))c.target.setAttribute('aria-busy','false');}
 }

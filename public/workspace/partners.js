@@ -21,7 +21,7 @@ export function resetPartners(){
   if(c.target.dataset.partnerWorkspace===String(c.generation)){c.target.replaceChildren();delete c.target.dataset.partnerWorkspace;}
 }
 async function accessLoss(c,error){if(context===c){resetPartners();await c.onAccessLoss(error);}}
-async function verified(c){if(!alive(c))return false;const allowed=await c.verifyAccess();if(!alive(c))return false;if(!allowed){await accessLoss(c,{status:401,message:'Sign in with the authorized owner account.'});return false;}return true;}
+async function verified(c,renew=false){if(!alive(c))return false;const allowed=await (renew&&c.renewAccess?c.renewAccess():c.verifyAccess());if(!alive(c))return false;if(!allowed){await accessLoss(c,{status:401,message:'Sign in with the authorized owner account.'});return false;}return true;}
 export async function renderPartners(target,options){
   resetPartners();
   const c={...options,target,generation,local:new window.AbortController(),sequence:0,state:null,writer:null,dialog:null,
@@ -151,7 +151,7 @@ async function save(c,event){
     if(cause.code==='CSRF_REJECTED'){
       state.needsProof=true;error.textContent='Session verification expired. Verify your session, then save this draft explicitly.';error.focus();
       const region=event.target.querySelector('[data-partner-conflict]');region.replaceChildren();const verify=document.createElement('button');verify.type='button';verify.className='button subtle';verify.textContent='Verify session';region.append(verify);
-      verify.addEventListener('click',async()=>{verify.disabled=true;try{if(!await verified(c)||c.state!==state)return;state.needsProof=false;submit.disabled=false;region.replaceChildren();error.textContent='Session verification renewed. Review your draft, then save explicitly.';}catch(failure){if(!alive(c))return;error.textContent=message(failure);verify.disabled=false;}},{signal:c.local.signal});return;
+      verify.addEventListener('click',async()=>{verify.disabled=true;try{if(!await verified(c,true)||c.state!==state)return;state.needsProof=false;submit.disabled=false;region.replaceChildren();error.textContent='Session verification renewed. Review your draft, then save explicitly.';}catch(failure){if(!alive(c))return;error.textContent=message(failure);verify.disabled=false;}},{signal:c.local.signal});return;
     }
     if(cause.code==='DUPLICATE_PARTNER_ENTRY'){
       const region=event.target.querySelector('[data-partner-conflict]');

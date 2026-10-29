@@ -3,14 +3,13 @@ import {mkdir} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import {startOwnerBrowserHarness} from '../support/owner-crm-harness';
 import {StaffCollectionsService} from '../../src/staff-collections';
-import {CompanyFinanceService} from '../../src/company-finance';
 import {seedPropertyReceipt} from '../support/staff-qa-fixture';
 
 const test=base.extend<{operationsEnabled:boolean}>({operationsEnabled:[false,{option:true}]});
 let server:Awaited<ReturnType<typeof startOwnerBrowserHarness>>;
 test.setTimeout(120_000);
 test.beforeEach(async({operationsEnabled})=>{
-  server=await startOwnerBrowserHarness(operationsEnabled?{migrationFiles:['006_local_operations_records.up.sql'],operationsFactory:properties=>({staffCollections:new StaffCollectionsService(properties),companyFinance:new CompanyFinanceService(properties)})}:{});
+  server=await startOwnerBrowserHarness(operationsEnabled?{migrationFiles:['006_local_operations_records.up.sql'],operationsFactory:properties=>({staffCollections:new StaffCollectionsService(properties)})}:{});
   await mkdir('evidence/navigation/screenshots',{recursive:true});
 });
 test.afterEach(async()=>{await server?.close();});
@@ -24,7 +23,7 @@ async function sidebarNames(page:Page,names:string[]){const menu=page.getByRole(
 
 test('core sidebar exposes working destinations and legacy hashes still load',async({page},info)=>{
   const errors:string[]=[],receiptRequests:string[]=[];page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.url().includes('/staff-collections/receipts'))receiptRequests.push(request.url());});
-  const unavailable=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/hamdee/v1/staff-collections');await login(page);expect((await unavailable).status()).toBe(503);
+  const availability=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/hamdee/v1/capabilities');await login(page);const capabilityResponse=await availability;expect(capabilityResponse.status()).toBe(200);expect((await capabilityResponse.json()).data.staffCollections).toBe(false);
   await sidebarNames(page,['Dashboard','Villas & Properties','Expenses','Reports']);expect(receiptRequests).toHaveLength(0);
   const id=await createVilla(page);await expect(page.getByRole('button',{name:'Partners',exact:true})).toHaveCount(0);await expect(page.getByRole('button',{name:'Funding',exact:true})).toHaveCount(0);
   await page.getByRole('button',{name:'Back to properties',exact:true}).click();await expect(page.getByRole('heading',{name:'Properties',exact:true})).toBeVisible();await page.getByRole('button',{name:'Synthetic navigation villa',exact:true}).click();expect(page.url()).toContain('#properties/'+id);
@@ -105,7 +104,7 @@ test.describe('Actual local006 readiness',()=>{
   });
   test('late service readiness cannot add Staff after logout',async({page})=>{
     let release!:()=>void,entered!:()=>void,delivered!:()=>void;const hold=new Promise<void>(resolve=>{release=resolve;}),ready=new Promise<void>(resolve=>{entered=resolve;}),settled=new Promise<void>(resolve=>{delivered=resolve;});
-    await page.route('**/api/hamdee/v1/staff-collections?*',async route=>{const response=await route.fetch();entered();await hold;try{await route.fulfill({response});}catch{/* Expected when logout aborts the read. */}finally{delivered();}});
+    await page.route('**/api/hamdee/v1/capabilities',async route=>{const response=await route.fetch();entered();await hold;try{await route.fulfill({response});}catch{/* Expected when logout aborts the read. */}finally{delivered();}});
     await login(page);await ready;await expect(page.locator('#navigation a[href="#staff-collections"]')).toHaveCount(0);await expect(page.locator('#navigation button').filter({hasText:'Staff Collections'})).toBeDisabled();await page.getByRole('button',{name:'Sign out',exact:true}).click();await expect(page.getByLabel('Email',{exact:true})).toBeVisible();release();await settled;await expect(page.locator('#navigation a[href="#staff-collections"]')).toHaveCount(0);await expect(page.locator('#navigation')).toHaveCount(0);await expect(page.getByLabel('Email',{exact:true})).toBeVisible();
   });
 });

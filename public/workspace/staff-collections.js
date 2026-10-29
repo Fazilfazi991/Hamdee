@@ -63,7 +63,7 @@ function closeCommand(force=false){
   const state=dialogState;state?.pageController?.abort();document.querySelector('#staff-dialog')?.remove();dialogState=null;
   if(!force&&state?.options.trigger?.isConnected)state.options.trigger.focus();
 }
-export function resetStaffCollections(){generation++;readController?.abort();readController=null;workspaceContext=null;writeController?.abort();writeController=null;closeCommand(true);period={month:today().slice(0,7),asOf:today(),collectorId:''};}
+export function resetStaffCollections(preservePeriod=false){generation++;readController?.abort();readController=null;workspaceContext=null;writeController?.abort();writeController=null;closeCommand(true);if(!preservePeriod)period={month:today().slice(0,7),asOf:today(),collectorId:''};}
 
 export function openStaffCommand(action,record,options){
   if(options.signal?.aborted||!options.isCurrent()||writeController)return;
@@ -120,7 +120,7 @@ async function loadReceiptPage(state,dialog,paging){
     if(load.hidden)selected.focus();
   }catch(cause){
     if(!alive(state)||signal.aborted)return;
-    if(cause.status===401||cause.code==='OWNER_ACCESS_DENIED'){await state.options.onAccessLoss(cause);return;}
+    if(cause.status===401||(cause.status===403&&cause.code!=='CSRF_REJECTED')||cause.code==='OWNER_ACCESS_DENIED'){await state.options.onAccessLoss(cause);return;}
     status.textContent=receiptStatus(state.options.choices.receipts,paging);error.textContent=cause.message+' Your draft and loaded receipts are retained. Use Load more receipts to retry.';
   }finally{if(state.pageController===controller)state.pageController=null;if(alive(state)){load.disabled=false;save.disabled=false;dialog.querySelector('#staff-receipt-paging').setAttribute('aria-busy','false');}}
 }
@@ -148,7 +148,7 @@ async function saveCommand(state,form){
     writeController=null;closeCommand();await state.options.onSaved(state.action);
   }catch(cause){
     if(!alive(state)||controller.signal.aborted)return;
-    if(cause.status===401||cause.code==='OWNER_ACCESS_DENIED'){await state.options.onAccessLoss(cause);return;}
+    if(cause.status===401||(cause.status===403&&cause.code!=='CSRF_REJECTED')||cause.code==='OWNER_ACCESS_DENIED'){await state.options.onAccessLoss(cause);return;}
     state.pending.uncertain=Boolean(cause.uncertain);
     form.querySelectorAll('input,select').forEach(input=>input.disabled=state.pending.uncertain);
     error.textContent=cause.message+(state.pending.uncertain?' The save may have reached the server. Save again to confirm the exact submission; closing will not undo a committed change.':'');
@@ -170,7 +170,7 @@ async function saveCommand(state,form){
     }
     if(cause.code==='CSRF_REJECTED'){
       const renew=document.createElement('button');renew.type='button';renew.className='button subtle';renew.textContent='Renew session verification';recovery.append(renew);
-      renew.addEventListener('click',async()=>{if(!alive(state))return;renew.disabled=true;try{if(await state.options.verifyAccess()&&alive(state)){error.textContent='Session verified. Review your draft and save explicitly.';recovery.innerHTML='';error.focus();}}catch(failure){if(alive(state)){error.textContent=failure.message;renew.disabled=false;}}});
+      renew.addEventListener('click',async()=>{if(!alive(state))return;renew.disabled=true;try{if(await (state.options.renewAccess||state.options.verifyAccess)()&&alive(state)){error.textContent='Session verified. Review your draft and save explicitly.';recovery.innerHTML='';error.focus();}}catch(failure){if(alive(state)){error.textContent=failure.message;renew.disabled=false;}}});
     }
     error.focus();
   }finally{if(writeController===controller)writeController=null;if(button.isConnected){button.disabled=false;if(load)load.disabled=Boolean(state.pending?.uncertain);form.setAttribute('aria-busy','false');}}
@@ -217,7 +217,9 @@ function draw(c){
 export async function renderStaffCollections(target,options){
   if(options.signal?.aborted||!options.isCurrent())return;
   readController?.abort();const controller=new window.AbortController();readController=controller;
-  const c={...options,target,generation,receiptFilters:{asOf:period.asOf,...(options.receiptFilters?.propertyId?{propertyId:options.receiptFilters.propertyId}:{})},receiptPaging:{hasMore:false,nextCursor:null}};workspaceContext=c;target.setAttribute('aria-busy','true');
+  const c={...options,target,generation,receiptFilters:{asOf:period.asOf,...(options.receiptFilters?.propertyId?{propertyId:options.receiptFilters.propertyId}:{})},receiptPaging:{hasMore:false,nextCursor:null}};workspaceContext=c;
+  options.signal.addEventListener('abort',()=>{if(workspaceContext===c)resetStaffCollections(true);},{once:true,signal:controller.signal});
+  target.setAttribute('aria-busy','true');
   target.innerHTML='<div class="empty" role="status">Loading saved collectors, receipts and custody balances…</div>';
   const signal=window.AbortSignal.any([options.signal,controller.signal]);
   try{
@@ -226,7 +228,7 @@ export async function renderStaffCollections(target,options){
       c.api.staffReceipts(c.receiptFilters,signal),c.api.financeRead({month:period.month,asOf:period.asOf},signal)
     ]);
     if(!active(c)||signal.aborted)return;
-    for(const result of [overview,receipts,accounts])if(result.status==='rejected'&&(result.reason.status===401||result.reason.code==='OWNER_ACCESS_DENIED')){await c.onAccessLoss(result.reason);return;}
+    for(const result of [overview,receipts,accounts])if(result.status==='rejected'&&(result.reason.status===401||(result.reason.status===403&&result.reason.code!=='CSRF_REJECTED')||result.reason.code==='OWNER_ACCESS_DENIED')){await c.onAccessLoss(result.reason);return;}
     if(overview.status==='rejected')throw overview.reason;
     if(!await c.verifyAccess()||!active(c)||signal.aborted)return;
     c.data=overview.value.data;
@@ -238,6 +240,6 @@ export async function renderStaffCollections(target,options){
     if(accounts.status==='fulfilled'&&Array.isArray(accounts.value.data?.accounts))c.accounts=accounts.value.data.accounts.filter(row=>row.scope==='company');
     else{c.accounts=[];c.accountIssue=accounts.status==='rejected'?accounts.reason.message:'Unsupported company account format.';}
     draw(c);
-  }catch(error){if(!active(c)||signal.aborted)return;if(error.status===401||error.code==='OWNER_ACCESS_DENIED')await c.onAccessLoss(error);else unavailable(target,error.message);}
+  }catch(error){if(!active(c)||signal.aborted)return;if(error.status===401||(error.status===403&&error.code!=='CSRF_REJECTED')||error.code==='OWNER_ACCESS_DENIED')await c.onAccessLoss(error);else unavailable(target,error.message);}
   finally{if(active(c)&&!signal.aborted)target.setAttribute('aria-busy','false');if(readController===controller)readController=null;}
 }

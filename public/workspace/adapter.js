@@ -1,10 +1,19 @@
 // Explicit backend-only adapter. Never imports model.js or accesses localStorage.
 export class PropertyApi {
-  constructor(base='/api/hamdee/v1') { this.base=base; this.csrfToken=null; }
-  async request(path,options={}) {
-    return this.fetchJson(this.base+path,options);
+  constructor(base='/api/hamdee/v1') { this.base=base; this.csrfToken=null; this.clearReads(); }
+  clearReads(){this.reads=new WeakMap();this.accessGeneration=(this.accessGeneration||0)+1;this.accessDeadline=0;}
+  request(path,options={}) {
+    if(options.method&&options.method!=='GET'){this.clearReads();return this.fetchJson(this.base+path,options);}
+    // Share only an outstanding read within the identical route AbortSignal.
+    // No settled responses, financial values or cross-session data are cached.
+    const signal=options.signal;if(!signal||signal.aborted)return this.fetchJson(this.base+path,options);
+    let reads=this.reads.get(signal);if(!reads){reads=new Map();this.reads.set(signal,reads);}
+    if(reads.has(path))return reads.get(path);
+    const pending=this.fetchJson(this.base+path,options).finally(()=>{if(reads.get(path)===pending)reads.delete(path);});
+    reads.set(path,pending);return pending;
   }
   async fetchJson(url,options={}) {
+    const accessGeneration=this.accessGeneration;
     let response,result,readController,deadline,aborted=false;
     const upstream=options.signal,onAbort=()=>readController.abort(upstream.reason);
     // Bound reads only. Mutations retain their existing exact-key/uncertain
@@ -21,12 +30,20 @@ export class PropertyApi {
     try{result=await response.json();}
     catch{const error=new Error('The service returned an unreadable response. Retry the same submission or refresh the connection.');error.status=response.status;error.uncertain=true;throw error;}
     if(!response.ok){const error=new Error(result.error?.message||'The operation could not be confirmed.');error.code=result.error?.code;error.status=response.status;error.requestId=result.requestId;error.retryAfter=response.headers.get('Retry-After');error.uncertain=response.status>=500;throw error;}
+    const csrf=response.headers.get('X-Hamdee-CSRF'),deadlineValue=response.headers.get('X-Hamdee-Session-Expires-At'),expiresAt=Number(deadlineValue);
+    if(csrf&&deadlineValue&&Number.isSafeInteger(expiresAt)&&expiresAt>0){
+      result.access={state:'authenticated',csrfToken:csrf,expiresAt,factors:[]};
+      if(accessGeneration===this.accessGeneration&&!upstream?.aborted&&expiresAt>=this.accessDeadline){
+        this.accessDeadline=expiresAt;this.onAccessState?.(result.access);
+      }
+    }
     return result;
     }finally{window.clearTimeout(deadline);upstream?.removeEventListener('abort',onAbort);}
   }
   rememberState(data){
     if(!data||!['anonymous','authenticated','recovery_pending'].includes(data.state)||typeof data.csrfToken!=='string'||!data.csrfToken||!Array.isArray(data.factors)||data.factors.length!==0||(data.expiresAt!==null&&(!Number.isSafeInteger(data.expiresAt)||data.expiresAt<0))){throw new Error('The service returned an invalid access state. Check the connection before continuing.');}
     this.csrfToken=data.csrfToken;
+    if(data.state==='authenticated'&&data.expiresAt!==null)this.accessDeadline=Math.max(this.accessDeadline,data.expiresAt);
     return {state:data.state,csrfToken:data.csrfToken,expiresAt:data.expiresAt,factors:[]};
   }
   authState(signal){return this.fetchJson('/api/hamdee/auth/state',{signal});}
@@ -35,6 +52,7 @@ export class PropertyApi {
     if(!this.csrfToken){const error=new Error('Check your session before submitting this action.');error.code='CSRF_REJECTED';error.status=403;throw error;}
     return this.fetchJson('/api/hamdee/auth/'+action,{method:'POST',signal,headers:{'Content-Type':'application/json','X-Hamdee-CSRF':this.csrfToken},body:JSON.stringify(body)});
   }
+  capabilities(signal){return this.request('/capabilities',{signal});}
   session(signal){return this.request('/session',{signal});}
   dashboard(signal){return this.request('/dashboard',{signal});}
   operationsDashboard(filters,signal){return this.request('/operations-dashboard?'+new URLSearchParams(filters),{signal});}

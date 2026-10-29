@@ -8,6 +8,8 @@ import { requireThat } from './errors';
 import { PropertyService,safeUnexpected } from './service';
 import { randomBytes,randomUUID } from 'node:crypto';
 import { uuid } from './validation';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { performance } from 'node:perf_hooks';
 import { StaffCollectionsService } from './staff-collections';
 import { CompanyFinanceService } from './company-finance';
 import { CarRentalService,combinedReceiptSourceReader } from './car-rentals';
@@ -26,8 +28,30 @@ export interface OwnerApplication {
 /** Test composition takes injected provider/database, never an env fake mode.
  * Caller owns database cleanup. No provider/database work at construction. */
 export function createOwnerApplication(options:OwnerApplicationOptions):OwnerApplication {
+  // Timings contain fixed counters/durations only, scoped to this request even
+  // when other owner requests are executing concurrently. No identity cache.
+  const measurements=new AsyncLocalStorage<{auth:number;database:number;sql:number;transactions:number;queries:number}>();
   const auth=createOwnerAuth(options),owner=Object.freeze({...options.policy.owner}),logger=options.logger,
-    service=new PropertyService({transaction:options.database.transaction.bind(options.database)},owner,options.databaseEnvironment);
+    service=new PropertyService({async transaction(work){
+      const metrics=measurements.getStore(),started=performance.now();if(metrics)metrics.transactions++;
+      try{return await options.database.transaction(sql=>work({async query(text,params){
+        const began=performance.now();if(metrics)metrics.queries++;
+        try{return await sql.query(text,params);}finally{if(metrics)metrics.sql+=performance.now()-began;}
+      }}));}finally{if(metrics)metrics.database+=performance.now()-started;}
+    }},owner,options.databaseEnvironment);
+  async function authWork<T>(work:()=>Promise<T>):Promise<T>{
+    const metrics=measurements.getStore(),began=performance.now();
+    try{return await work();}finally{if(metrics)metrics.auth+=performance.now()-began;}
+  }
+  async function measured(work:()=>Promise<Response>):Promise<Response>{
+    return measurements.run({auth:0,database:0,sql:0,transactions:0,queries:0},async()=>{
+      const began=performance.now(),response=await work(),m=measurements.getStore()!;
+      if(!response.ok)return response;
+      const headers=new Headers(response.headers),duration=(value:number)=>value.toFixed(1);
+      headers.set('Server-Timing',`owner;dur=${duration(performance.now()-began)}, auth;dur=${duration(m.auth)}, database;dur=${duration(m.database)}, sql;dur=${duration(m.sql)}, db_tx;desc="${m.transactions}", db_query;desc="${m.queries}"`);
+      return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
+    });
+  }
   // Construction does not query the optional operations schema. Existing auth
   // and property activation remain independent of local migration 006.
   const operations=options.operationsFactory?.(service)??{
@@ -41,23 +65,33 @@ export function createOwnerApplication(options:OwnerApplicationOptions):OwnerApp
     if(erase||safe.status===401||safe.code==='OWNER_ACCESS_DENIED')for(const c of clear)headers.append('Set-Cookie',c);
     return Response.json({error:{code:safe.code,message:safe.message},requestId},{status:safe.status,headers});
   }
-  const withCookies=(response:Response,lines:readonly string[])=>{const headers=new Headers(response.headers);for(const c of lines)headers.append('Set-Cookie',c);
+  const withCookies=(response:Response,lines:readonly string[],state?:OwnerAuthorization['state'])=>{const headers=new Headers(response.headers);for(const c of lines)headers.append('Set-Cookie',c);
+    // Reuse the already verified access projection without another auth/state
+    // request or a parse/stringify of potentially large financial JSON bodies.
+    // These are functional same-origin session headers, never diagnostic logs.
+    if(response.ok&&state?.state==='authenticated'){
+      headers.set('X-Hamdee-Session-Expires-At',String(state.expiresAt));
+      headers.set('X-Hamdee-CSRF',state.csrfToken);
+    }
     return new Response(response.body,{status:response.status,statusText:response.statusText,headers});};
   return Object.freeze<OwnerApplication>({
     async handleAuth(request){
+      return measured(async()=>{
       try{
-        const response=await auth.handle(request),data=response.ok?(await response.clone().json()).data:null;
+        const response=await authWork(()=>auth.handle(request)),data=response.ok?(await response.clone().json()).data:null;
         // Managed authentication never bootstraps/reenables database membership.
         if(data?.state==='authenticated')await service.session(owner);
         return response;
       }catch(error){return failed(error,true);}
+      });
     },
     async handleProperties(request){
+      return measured(async()=>{
       try{
         // Authorization reads only URL/method/headers. Do not tee the command
         // body: an unread authorization clone can block body-limit cancellation.
         const authorizationRequest=new Request(request.url,{method:request.method,headers:new Headers(request.headers)});
-        let current=await auth.authorize(authorizationRequest);
+        let current=await authWork(()=>auth.authorize(authorizationRequest));
         function currentRequest():Request {
           const headers=new Headers(request.headers),jar=new Map<string,string>();
           for(const f of (headers.get('cookie')??'').split(';')){const i=f.indexOf('=');if(i>0)jar.set(f.slice(0,i).trim(),f.slice(i+1).trim());}
@@ -69,14 +103,15 @@ export function createOwnerApplication(options:OwnerApplicationOptions):OwnerApp
           return new Request(request.url,{method:request.method,headers});
         }
         const identity=bindIdentityRecheck(current.identity,async()=>{
-          const next:OwnerAuthorization=await auth.authorize(currentRequest());
+          const next:OwnerAuthorization=await authWork(()=>auth.authorize(currentRequest()));
           requireThat(next.identity.issuer===owner.issuer&&next.identity.subject===owner.subject&&next.sessionId===current.sessionId,
             401,'UNAUTHENTICATED','Sign in with an authorized account.');current=next;
         });
         const provider={kind:'managed-supabase-owner',validate:async()=>identity};
         const response=await createHandler(provider,service,logger,operations)(request);
-        return withCookies(response,response.status===401?clear:current.setCookies);
+        return withCookies(response,response.status===401?clear:current.setCookies,current.state);
       }catch(error){return failed(error);}
+      });
     }
   });
 }

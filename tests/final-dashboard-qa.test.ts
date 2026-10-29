@@ -70,7 +70,8 @@ test('Final QA: actual account/custody movements stay separate in funds comparis
  const html=await markup(sixth),funds=html.split('overview-funds-card')[1]?.split('overview-funds-note')[0];assert.ok(funds);
  for(const value of ['110.00','210.00','30.00'])assert.ok(funds.includes(value));
  assert.match(html,/Company Funds/);assert.match(html,/Overdue rent/);assert.match(html,/1 due · since 5 Nov/);
- assert.match(html,/Separate locations · not income or available profit/);
+ assert.match(html,/Separate money locations, not income or available profit/);
+ assert.match(html,/Separate balances · not income or profit/);
  assert.doesNotMatch(funds,/Total funds|Available profit:|350\.00|999\.00|999,999/);
  const incomplete=structuredClone(sixth),changed=currency(incomplete,'XTS');changed.companyCash=null;changed.companyBank='-25.123456789012';changed.operations.staffHeld='0';
  const unknown=await markup(incomplete),unknownFunds=unknown.split('overview-funds-card')[1]?.split('overview-funds-note')[0];assert.ok(unknownFunds);
