@@ -2,7 +2,9 @@
 export const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // Presentation only: the isolated loopback demo server supplies the marker.
 // It cannot select a database, authenticate a user or enable a hosted demo.
-export const isIsolatedDemoContext=(hostname,marker)=>['localhost','127.0.0.1','[::1]'].includes(hostname)&&marker==='isolated-local';
+export const isIsolatedDemoContext=(hostname,marker)=>
+  (['localhost','127.0.0.1','[::1]'].includes(hostname)&&marker==='isolated-local')||
+  (hostname==='hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app'&&marker==='isolated-hosted-demo');
 const today=()=>new Date().toISOString().slice(0,10);
 export const defaultCollectionMonth=(date=today())=>date.slice(0,7)<'2026-11'?'2026-11':date.slice(0,7);
 export const decimal=v=>{const n=BigInt(v??0);return `${n/100n}.${String(n%100n).padStart(2,'0')}`;};

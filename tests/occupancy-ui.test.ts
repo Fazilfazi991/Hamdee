@@ -111,11 +111,15 @@ test('A real dated agreement can show occupied while historical-only and future 
   assert.equal(ui.occupancyStatus(data, data.rooms[0]), 'unknown');
 });
 
-test('Isolated DEMO marker is presentation-only and cannot activate on hosted or lookalike hostnames', () => {
+test('Isolated DEMO marker requires an exact local or approved hosted origin', () => {
   for (const host of ['localhost', '127.0.0.1', '[::1]']) assert.equal(ui.isIsolatedDemoContext(host, 'isolated-local'), true);
   for (const host of ['hamdee.vercel.app', '127.0.0.1.example.com', 'localhost.example.com', '']) assert.equal(ui.isIsolatedDemoContext(host, 'isolated-local'), false);
   assert.equal(ui.isIsolatedDemoContext('localhost', undefined), false);
   assert.equal(ui.isIsolatedDemoContext('localhost', 'true'), false);
+  const hosted='hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app';
+  assert.equal(ui.isIsolatedDemoContext(hosted,'isolated-hosted-demo'),true);
+  for (const marker of [undefined,'','true','isolated-local']) assert.equal(ui.isIsolatedDemoContext(hosted,marker),false);
+  for (const host of ['hamdee.vercel.app','localhost',`evil-${hosted}`,`${hosted}.example.com`,'']) assert.equal(ui.isIsolatedDemoContext(host,'isolated-hosted-demo'),false);
 });
 
 test('A conflicting historical source is held visibly rather than choosing an occupant', async () => {
