@@ -45,21 +45,57 @@ test('An imported room without a dated agreement is unverified, including legacy
   assert.equal(JSON.stringify(data), before, 'Rendering cannot create agreements, dues or modify imported records');
 });
 
+test('Owner-confirmed occupancy and vacancy do not require an agreement document', async () => {
+  const data = fixture();
+  const room = data.rooms[0] as typeof data.rooms[0] & {occupancyConfirmation: unknown; currentTenantId: string; occupancyVersion: number};
+  room.occupancy = 'occupied';
+  room.currentTenantId = 'demo-tenant-1';
+  room.occupancyVersion = 1;
+  room.occupancyConfirmation = {status:'occupied',tenantId:room.currentTenantId,internalAgreementId:null};
+  assert.equal(ui.occupancyStatus(data, room), 'occupied');
+  const html = await render(data);
+  assert.match(html, /<span class="badge green">Occupied<\/span>/);
+  assert.match(html, /DEMO historical &lt;img src=x&gt;/);
+  assert.match(html, /Change tenant/);
+  assert.match(html, /Collect rent/);
+  room.occupancy = 'vacant';
+  assert.equal(ui.occupancyStatus(data, room), 'vacant');
+  assert.equal(data.agreements.length, 0);
+});
+
+test('New rental terms use QAR while existing tenant terms retain their saved currency', () => {
+  const existing = {tenantId:'synthetic-tenant',currency:'INR'};
+  assert.equal(ui.confirmedTermsCurrency(existing,'synthetic-tenant'),'INR');
+  assert.equal(ui.confirmedTermsCurrency(existing,'another-tenant'),'QAR');
+  assert.equal(ui.confirmedTermsCurrency(null,'synthetic-tenant'),'QAR');
+});
+
 test('Villa tenant screen includes historical snapshot contacts and excludes unrelated contacts', async () => {
   const html = await render(fixture(), 'tenants');
   const tenantTable = html.split('aria-label="Tenant register"')[1].split('</table>')[0];
   assert.match(tenantTable, /DEMO historical &lt;img src=x&gt;/);
   assert.doesNotMatch(tenantTable, /DEMO unrelated contact/);
-  assert.match(html, /does not create an agreement or confirm current occupancy/);
+  assert.doesNotMatch(tenantTable, /DEMO snapshot contact|<th>Notes<\/th>/);
+  assert.match(tenantTable, /Edit tenant/);
+  assert.match(html, /does not establish current occupancy/);
 });
 
-test('Room history separates historical snapshot and dated agreements, escaping source references', async () => {
+test('An owner-confirmed October source is labelled without asserting current occupancy', async () => {
+  const data = {...fixture(),sourceConfirmations:[{tenantId:'demo-tenant-1',period:'2026-10'}]};
+  const html = await render(data, 'tenants');
+  const tenantTable = html.split('aria-label="Tenant register"')[1].split('</table>')[0];
+  assert.match(tenantTable, /October 2026 · owner confirmed/);
+  assert.equal(ui.occupancyStatus(data, data.rooms[0]), 'unknown');
+});
+
+test('Room history keeps historical occupants while hiding raw source references', async () => {
   await render(fixture());
   handlers.get('click')?.({ target: { closest: () => ({ dataset: { rentalAction: 'room-history', id: 'demo-room-1' } }) } });
   assert.ok(dialog);
   assert.match(dialog.innerHTML, /aria-label="Historical occupancy snapshots"/);
   assert.match(dialog.innerHTML, /October 2026/);
-  assert.match(dialog.innerHTML, /DEMO source &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(dialog.innerHTML, /October 2026 collection sheet/);
+  assert.doesNotMatch(dialog.innerHTML, /DEMO source|sourceReference/);
   assert.doesNotMatch(dialog.innerHTML, /<script>|<img/);
   assert.match(dialog.innerHTML, /aria-label="Previous room occupants"/);
 });
@@ -75,17 +111,11 @@ test('A real dated agreement can show occupied while historical-only and future 
   assert.equal(ui.occupancyStatus(data, data.rooms[0]), 'unknown');
 });
 
-test('DEMO marker is presentation-only and rejects Production, missing markers and lookalike hosts', () => {
+test('Isolated DEMO marker is presentation-only and cannot activate on hosted or lookalike hostnames', () => {
   for (const host of ['localhost', '127.0.0.1', '[::1]']) assert.equal(ui.isIsolatedDemoContext(host, 'isolated-local'), true);
   for (const host of ['hamdee.vercel.app', '127.0.0.1.example.com', 'localhost.example.com', '']) assert.equal(ui.isIsolatedDemoContext(host, 'isolated-local'), false);
   assert.equal(ui.isIsolatedDemoContext('localhost', undefined), false);
   assert.equal(ui.isIsolatedDemoContext('localhost', 'true'), false);
-  const demoHost = 'hamdee-git-codex-hamdee-demo-preview-faziils-projects.vercel.app';
-  assert.equal(ui.isIsolatedDemoContext(demoHost, 'isolated-hosted-demo'), true);
-  for (const host of ['hamdee.vercel.app', `${demoHost}.example.com`, 'localhost']) {
-    assert.equal(ui.isIsolatedDemoContext(host, 'isolated-hosted-demo'), false);
-  }
-  assert.equal(ui.isIsolatedDemoContext(demoHost, 'isolated-local'), false);
 });
 
 test('A conflicting historical source is held visibly rather than choosing an occupant', async () => {

@@ -1,5 +1,5 @@
 import { PropertyApi } from './adapter.js';
-import { renderRental,resetRental,rentalReportPeriod,isIsolatedDemoContext } from './rental.js';
+import { renderRental,resetRental,rentalReportPeriod,rentalSectionLinks,isIsolatedDemoContext } from './rental.js';
 import { renderDailyDashboard,resetDailyDashboard } from './daily-dashboard.js';
 import { renderExpenses,resetExpenses,expenseReportPeriod } from './expenses.js';
 const api=new PropertyApi(),$=s=>document.querySelector(s),icon=window.icon;
@@ -11,9 +11,9 @@ let filters={archiveState:'active',q:'',limit:'50',cursor:''},page=null;
 let managed=null,access=null,recoveryView=false,readController=null,writeController=null,authController=null,expiryTimer=null;
 let staffWorkspace=null,staffReady=false,capabilityController=null;
 let carReady=false,companyReady=false,personalReady=false,carWorkspace=null,companyWorkspace=null,personalWorkspace=null;
-let partnerReady=false,partnerWorkspace=null;
+let partnerReady=false,partnerWorkspace=null,documentWorkspace=null;
 let moduleStates={};
-function resetOwnerOperations(){resetDailyDashboard();carWorkspace?.resetCarRentals();companyWorkspace?.resetCompanyFinance();personalWorkspace?.resetPersonalFinance();partnerWorkspace?.resetPartners();}
+function resetOwnerOperations(){resetDailyDashboard();carWorkspace?.resetCarRentals();companyWorkspace?.resetCompanyFinance();personalWorkspace?.resetPersonalFinance();partnerWorkspace?.resetPartners();documentWorkspace?.resetDocuments();}
 // Retain HAMDEE's paper panels, brass actions, Inter and compact 4px rhythm.
 // Owner access has one primary action; property metadata keeps its existing hierarchy.
 const can=action=>session?.capabilities.includes(action);
@@ -22,7 +22,7 @@ const heading=(title,subtitle,actions='')=>`<div class="page-head"><div><span cl
 const unavailable=(title,message)=>`<section class="panel foundation-unavailable"><span class="eyebrow">HAMDEE WORKSPACE</span><h1>${e(title)}</h1><p>${e(message)}</p>${btn('Retry connection','refresh','primary')}</section>`;
 const date=v=>v?new Date(v).toLocaleString('en-GB',{timeZone:'UTC'})+' UTC':'—';
 const nav=[['dashboard','Dashboard','dashboard'],['properties','Villas & Properties','properties'],['car-rentals','Car Rentals','briefcase'],['staff-collections','Staff Collections','partners'],['expenses','Expenses','expenses'],['company','Company Finance','company'],['personal-finance','Personal Finance','wallet'],['partners','Partners & Investments','partners'],['reports','Reports','reports']];
-const rentalSections=['rental','rooms','tenants','agreements','collections','cheques','deposits'];
+const rentalSections=['rental','rooms','tenants','agreements','collections','cheques','deposits','documents'];
 const expenseSections=['expenses','landlord','utilities','maintenance'];
 // Observe failures immediately while another independently authorized request
 // is in flight. A route owns each result once; no private-record cache exists.
@@ -217,7 +217,7 @@ function propertyEmpty(){
   if(!managed)return '<div class="empty"><h2>No authorized properties</h2><p>Create your first basic property or ask an administrator to assign access.</p></div>';
   return filters.q||filters.archiveState!=='active'||filters.cursor?`<div class="empty"><h2>No matching properties</h2><p>Change your search or record status to see saved properties.</p>${btn('Clear filters','clear-property-filters')}</div>`:'<div class="empty"><h2>No properties yet</h2><p>Add your first property to begin your register.</p></div>';
 }
-function table(rows){return `<div class="table-wrap" tabindex="0" role="region" aria-label="Property records"><table class="data-table"><thead><tr><th scope="col">Property</th><th scope="col">Location</th><th scope="col">Record status</th><th scope="col">Revision</th><th scope="col">Updated</th></tr></thead><tbody>${rows.map(p=>`<tr><td><button class="record-name" data-action="detail" data-id="${e(p.id)}">${e(p.name)}</button><span class="record-sub">${e(p.id)}</span></td><td>${e(p.location||'Not provided')}</td><td><span class="badge ${p.lifecycleStatus==='archived'?'amber':'green'}">${e(p.lifecycleStatus)}</span></td><td>${p.version}</td><td>${e(date(p.updatedAt))}</td></tr>`).join('')}</tbody></table></div>`;}
+function table(rows){return `<div class="table-wrap" tabindex="0" role="region" aria-label="Property records"><table class="data-table"><thead><tr><th scope="col">Property</th><th scope="col">Location</th><th scope="col">Record status</th><th scope="col">Updated</th></tr></thead><tbody>${rows.map(p=>`<tr><td><button class="record-name" data-action="detail" data-id="${e(p.id)}">${e(p.name)}</button></td><td>${e(p.location||'Not provided')}</td><td><span class="badge ${p.lifecycleStatus==='archived'?'amber':'green'}">${e(p.lifecycleStatus)}</span></td><td>${e(date(p.updatedAt))}</td></tr>`).join('')}</tbody></table></div>`;}
 async function render(){
   const route=window.location.hash.slice(1)||'dashboard',sameProperty=route.startsWith('properties/')&&current?.id===route.split('/')[1];
   staffWorkspace?.resetStaffCollections();resetOwnerOperations();
@@ -240,7 +240,7 @@ async function render(){
         else{const module=await import('./company-finance.js');if(!validRead(seq,controller))return;companyWorkspace=module;await module.renderCompanyFinance($('#operations-workspace'),options);}
       }
     }else if(route.startsWith('properties/')){
-      const [,id,section='overview']=route.split('/'),propertyRequest=api.get(id,controller.signal);
+      const [,id,section=managed?'rooms':'overview']=route.split('/'),propertyRequest=api.get(id,controller.signal);
       let prefetchedRental,prefetchedExpenses;
       if(managed&&rentalSections.includes(section))prefetchedRental=settledRead(api.rentalRead({...rentalReportPeriod(),propertyId:id},controller.signal));
       if(managed&&expenseSections.includes(section)){
@@ -249,9 +249,16 @@ async function render(){
       }
       const result=await propertyRequest;if(!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;current=result.data;
       const p=current;main.innerHTML=heading(p.name,'Property details, rentals and operating history',btn('Back to properties','back')+(can('update')&&p.lifecycleStatus!=='archived'?btn('Edit property','edit','primary'):'')+(can('archive')&&p.lifecycleStatus!=='archived'?btn('Archive','archive','danger'):'')+(can('restore')&&p.lifecycleStatus==='archived'?btn('Restore','restore','primary'):''))+
-        `<section class="panel"><div class="detail-meta"><div><small>Internal ID</small><strong>${e(p.id)}</strong></div><div><small>Record lifecycle</small><strong>${e(p.lifecycleStatus)}</strong></div><div><small>Revision</small><strong>${p.version}</strong></div></div></section><div class="tabs" aria-label="Villa workspace"><button class="tab ${section==='overview'?'active':''}" data-action="overview">Overview</button>${managed?`<button class="tab ${rentalSections.includes(section)?'active':''}" data-action="rental">Rooms &amp; rentals</button><button class="tab ${expenseSections.includes(section)?'active':''}" data-action="property-expenses">Expenses &amp; maintenance</button>`:''}${can('audit')?`<button class="tab ${section==='history'?'active':''}" data-action="audit">Audit history</button>`:''}</div><section class="panel" id="detail-content"><div class="panel-header"><div><h2>Property metadata</h2><p>Archival changes record visibility only.</p></div></div><dl class="summary-list">${[['Name',p.name],['Location',p.location||'Not provided'],['Counterparty reference',p.counterpartyId||'Not assigned'],['Created',date(p.createdAt)],['Created by',p.createdBy],['Updated',date(p.updatedAt)],['Updated by',p.updatedBy],...(p.archivedAt?[['Archived',date(p.archivedAt)],['Archived by',p.archivedBy],['Archive reason',p.archiveReason]]:[])].map(([a,b])=>`<div><dt>${e(a)}</dt><dd>${e(b)}</dd></div>`).join('')}</dl></section>`;
+        `<section class="panel"><div class="detail-meta"><div><small>Property</small><strong>${e(p.name)}</strong></div><div><small>Record lifecycle</small><strong>${e(p.lifecycleStatus)}</strong></div></div></section><div class="tabs" aria-label="Villa workspace"><button class="tab ${section==='overview'?'active':''}" data-action="overview">Overview</button>${managed?`<button class="tab ${rentalSections.includes(section)?'active':''}" data-action="rental">Rooms &amp; rentals</button><button class="tab ${expenseSections.includes(section)?'active':''}" data-action="property-expenses">Expenses &amp; maintenance</button>`:''}${can('audit')?`<button class="tab ${section==='history'?'active':''}" data-action="audit">Audit history</button>`:''}</div><section class="panel" id="detail-content"><div class="panel-header"><div><h2>Property details</h2></div></div><dl class="summary-list">${[['Name',p.name],['Location',p.location||'Not provided'],...(p.archivedAt?[['Archived',date(p.archivedAt)],['Archive reason',p.archiveReason]]:[])].map(([a,b])=>`<div><dt>${e(a)}</dt><dd>${e(b)}</dd></div>`).join('')}</dl></section>`;
       const options={api,property:p,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss};
-      if(managed&&rentalSections.includes(section))await renderRental($('#detail-content'),{...options,section:section==='rental'?null:section,prefetchedRental});
+      if(managed&&section==='documents'){
+        const rentalResult=await prefetchedRental;if(!rentalResult.ok)throw rentalResult.error;
+        if(!validRead(seq,controller))return;
+        const module=await import('./documents.js');if(!validRead(seq,controller))return;
+        documentWorkspace=module;const content=$('#detail-content');content.innerHTML=rentalSectionLinks(p,'documents')+'<div id="property-documents"></div>';
+        await module.renderDocuments($('#property-documents'),{...options,rooms:rentalResult.value.data.rooms});
+      }
+      else if(managed&&rentalSections.includes(section))await renderRental($('#detail-content'),{...options,section:section==='rental'?null:section,prefetchedRental});
       else if(managed&&expenseSections.includes(section))await renderExpenses($('#detail-content'),{...options,section:section==='expenses'?null:section,prefetchedExpenses});
       else if(section==='history'&&can('audit'))await renderPropertyHistory(p.id,controller,seq);
     }else if(route==='dashboard'&&managed){
@@ -274,7 +281,7 @@ async function render(){
   finally{if(validRead(seq,controller))main.setAttribute('aria-busy','false');}
 }
 async function renderPropertyHistory(id,controller,seq){
-  try{const result=await api.audit(id,'',controller.signal);if(current?.id!==id||!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;$('#detail-content').innerHTML=`<div class="panel-header"><div><h2>Audit history</h2><p>Attributed metadata changes · No confidential payload dumps</p></div></div><div class="table-wrap" tabindex="0" role="region" aria-label="Property audit history"><table class="data-table"><thead><tr>${['Revision','Action','Actor','Reason','Time'].map(label=>`<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${result.data.map(a=>`<tr><td>${a.version}</td><td>${e(a.action)}</td><td>${e(a.actorId)}</td><td>${e(a.reason||'—')}</td><td>${e(date(a.occurredAt))}</td></tr>`).join('')}</tbody></table></div>${result.nextCursor?'<p class="muted-help">More history is available through the paginated API.</p>':''}`;}
+  try{const result=await api.audit(id,'',controller.signal);if(current?.id!==id||!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;$('#detail-content').innerHTML=`<div class="panel-header"><div><h2>Audit history</h2><p>Property changes and reasons</p></div></div><div class="table-wrap" tabindex="0" role="region" aria-label="Property audit history"><table class="data-table"><thead><tr>${['Action','Reason','Time'].map(label=>`<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${result.data.map(a=>`<tr><td>${e(a.action)}</td><td>${e(a.reason||'—')}</td><td>${e(date(a.occurredAt))}</td></tr>`).join('')}</tbody></table></div>${result.nextCursor?'<p class="muted-help">More history is available.</p>':''}`;}
   catch(error){if(!validRead(seq,controller))return;if(accessLost(error))await showAccessLoss(error);else $('#detail-content').innerHTML=unavailable('Audit unavailable',error.message);}
 }
 function propertySection(section){const hash='properties/'+current.id+(section?'/'+section:'');if(window.location.hash==='#'+hash)void render();else window.location.hash=hash;}
@@ -341,12 +348,12 @@ document.addEventListener('click',async event=>{
     if(current&&managed)propertySection('expenses');return;
   }
   if(action==='rental'){
-    if(current&&managed)propertySection('rental');return;
+    if(current&&managed)propertySection('rooms');return;
   }
   if(action==='audit'){
     if(current&&can('audit'))propertySection('history');return;
   }
-  if(action==='overview'){if(current)propertySection('');else await render();}
+  if(action==='overview'){if(current)propertySection('overview');else await render();}
 });
 $('#dialog').addEventListener('cancel',event=>{if($('#save-button').disabled)event.preventDefault();});
 document.addEventListener('keydown',event=>{

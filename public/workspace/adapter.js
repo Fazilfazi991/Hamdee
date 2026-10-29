@@ -50,6 +50,8 @@ export class PropertyApi {
   carRead(filters,signal){return this.request('/car-rentals?'+new URLSearchParams(filters),{signal});}
   carWrite(body,key,signal){return this.request('/car-rentals/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   rentalRead(filters,signal){return this.request('/rental?'+new URLSearchParams(filters),{signal});}
+  documentRead(filters,signal){return this.request('/documents?'+new URLSearchParams(filters),{signal});}
+  documentWrite(body,key,signal){return this.request('/documents',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   expenseRead(filters,signal){return this.request('/expenses?'+new URLSearchParams(filters),{signal});}
   expenseWrite(body,key,signal){return this.request('/expenses',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   rentalWrite(body,key,signal){return this.request('/rental',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}

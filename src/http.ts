@@ -8,6 +8,7 @@ import { RentalService } from './rental';
 import { ExpenseService } from './expenses';
 import { PartnerService } from './partners';
 import { DailyDashboardService } from './daily-dashboard';
+import { DocumentService, DOCUMENT_MAX_JSON_BYTES, documentDisposition } from './documents';
 const base='/api/hamdee/v1';
 /** Trusted server compositions only. Each module keeps its financial validation,
  * transaction, audit and command replay inside the existing owner context. */
@@ -22,10 +23,10 @@ export interface OperationsApiServices {
   readonly carRentals?:OperationsApiService;
   readonly personalFinance?:OperationsApiService;
 }
-async function readJson(request:Request):Promise<unknown> {
+async function readJson(request:Request,maximum=16384):Promise<unknown> {
   requireThat(request.headers.get('content-type')?.split(';')[0]==='application/json',415,'JSON_REQUIRED','Submit JSON metadata.');
   const reader=request.body?.getReader();let length=0;const chunks:Uint8Array[]=[];
-  if(reader){while(true){const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>16384){await reader.cancel();throw new ApiError(413,'PAYLOAD_TOO_LARGE','The submission is too large.');}chunks.push(value);}}
+  if(reader){while(true){const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>maximum){await reader.cancel();throw new ApiError(413,'PAYLOAD_TOO_LARGE','The submission is too large.');}chunks.push(value);}}
   try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new ApiError(400,'INVALID_JSON','Submit valid JSON metadata.');}
 }
 export function createHandler(provider:IdentityProvider,service:PropertyService,logger:SecurityLogger=securityLogger,operations:OperationsApiServices={}) {
@@ -41,9 +42,29 @@ export function createHandler(provider:IdentityProvider,service:PropertyService,
       // Also validate enabled membership before parsing untrusted mutation fields.
       // For operational modules, the full owner portfolio grant is checked in
       // this same transaction; it is never inferred from a role name alone.
-      const session=await service.session(identity,Object.hasOwn(modules,moduleName)||moduleName==='partners'||moduleName==='operations-dashboard');
+      const session=await service.session(identity,Object.hasOwn(modules,moduleName)||moduleName==='partners'||moduleName==='operations-dashboard'||moduleName==='documents');
       requireThat(url.pathname===base||url.pathname.startsWith(base+'/'),404,'NOT_FOUND','Endpoint not found.');
       if(path==='/session'&&request.method==='GET') return json({data:{...session,authenticationProvider:provider.kind||'server-validated'}});
+      if(moduleName==='documents'){
+        const documents=new DocumentService(service),parts=path.split('/').filter(Boolean);
+        requireThat(parts.length<=2,404,'NOT_FOUND','Endpoint not found.');
+        if(request.method==='GET'&&parts.length===2){
+          requireThat([...url.searchParams.keys()].length===0,400,'INVALID_QUERY','Check the document request.');
+          const file=await documents.get(identity,parts[1]);
+          return new Response(new Uint8Array(file.content),{status:200,headers:{...headers,'Content-Type':file.mimeType,
+            'Content-Disposition':documentDisposition(file.name,file.mimeType),'Content-Security-Policy':"default-src 'none'; sandbox",'Cross-Origin-Resource-Policy':'same-origin'}});
+        }
+        if(request.method==='GET'&&parts.length===1){
+          requireThat([...url.searchParams.keys()].every(k=>['propertyId','roomId','cursor'].includes(k)&&url.searchParams.getAll(k).length===1),400,'INVALID_QUERY','Check the document filters.');
+          return json({data:await documents.list(identity,url.searchParams.get('propertyId'),url.searchParams.get('roomId')??undefined,url.searchParams.get('cursor')??undefined)});
+        }
+        requireThat(request.method==='POST'&&parts.length===1,405,'METHOD_NOT_ALLOWED','This method is unavailable.');
+        requireThat([...url.searchParams.keys()].length===0,400,'INVALID_QUERY','Upload requests do not accept query filters.');
+        requireThat(request.headers.get('origin')===url.origin,403,'ORIGIN_REJECTED','This request origin is not permitted.');
+        const key=request.headers.get('idempotency-key');requireThat(key&&uuid.test(key),400,'IDEMPOTENCY_KEY_REQUIRED','A valid operation key is required.');
+        const result=await documents.upload(identity,await readJson(request,DOCUMENT_MAX_JSON_BYTES),key);
+        return json(result,200,result.replay?{'Idempotent-Replay':'true'}:{});
+      }
       if(moduleName==='operations-dashboard'){
         requireThat(path==='/operations-dashboard',404,'NOT_FOUND','Endpoint not found.');
         requireThat(request.method==='GET',405,'METHOD_NOT_ALLOWED','The daily operations dashboard is read-only.');

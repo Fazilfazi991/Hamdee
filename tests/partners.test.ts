@@ -330,7 +330,7 @@ test('Standalone partner UI: desktop/mobile actual service flow, safe rendering,
     await page.getByRole('status').filter({ hasText: 'Partner record saved.' }).waitFor(); assert.equal(await page.locator('td').filter({ hasText: '<script>SYNTHETIC</script>' }).count() >= 1, true);
     await page.getByRole('button', { name: 'Record contribution / withdrawal', exact: true }).click();
     await page.getByLabel('Property', { exact: true }).last().selectOption(String(p.id)); await page.getByLabel('Partner', { exact: true }).selectOption(String(partner.id)); await page.getByLabel('Recorded movement').selectOption('contribution');
-    await page.getByLabel('Movement date', { exact: true }).fill(width===1440?'2026-10-15':'2026-10-16'); await page.getByLabel('Exact recorded amount').fill('10.123456'); await page.getByLabel('Explicit currency code').fill('XTS');
+    await page.getByLabel('Movement date', { exact: true }).fill(width===1440?'2026-10-15':'2026-10-16'); await page.getByLabel('Exact recorded amount').fill('10.123456'); assert.equal(await page.locator('dialog[open] input[name="currency"]').inputValue(), 'QAR');
     const saveBounds = await page.getByRole('button', { name: 'Save partner record', exact: true }).boundingBox(); assert.ok(saveBounds && saveBounds.y >= 0 && saveBounds.y + saveBounds.height <= 900, 'Save remains within the viewport while form fields scroll');
     await page.screenshot({ path: `evidence/partners-form-${width}.png`, fullPage: true });
     await page.getByRole('button', { name: 'Save partner record', exact: true }).click();

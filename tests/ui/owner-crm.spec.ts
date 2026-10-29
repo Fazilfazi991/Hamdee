@@ -103,7 +103,7 @@ test('owner UI: rejected expense CSRF retains the draft for an explicit retry', 
   await dialog.getByLabel('Expense category', { exact: true }).selectOption({ label: 'Landlord rent / payment' });
   await dialog.getByLabel('Expense date', { exact: true }).fill('2026-10-05');
   await dialog.getByLabel('Recorded cost', { exact: true }).fill('7.50');
-  await dialog.getByLabel('Currency', { exact: true }).fill('QAR');
+  await expect(dialog.locator('input[name="currency"]')).toHaveValue('QAR');
   await dialog.getByLabel('Vendor / landlord', { exact: true }).fill('Synthetic retained CSRF vendor');
   let rejected = false;
   await page.route('**/api/hamdee/v1/expenses', async route => {

@@ -4,7 +4,7 @@ import { startOwnerBrowserHarness } from '../support/owner-crm-harness';
 
 let server: Awaited<ReturnType<typeof startOwnerBrowserHarness>>;
 test.setTimeout(90_000);
-test.beforeEach(async () => { server = await startOwnerBrowserHarness(); await mkdir('evidence/rental-qa', { recursive: true }); });
+test.beforeEach(async () => { server = await startOwnerBrowserHarness({migrationFiles:['011_local_owner_occupancy.up.sql']}); await mkdir('evidence/rental-qa', { recursive: true }); });
 test.afterEach(async () => { await server?.close(); });
 async function login(page: Page) {
   await page.goto(server.url + '/workspace/index.html#dashboard');
@@ -23,8 +23,9 @@ async function addProperty(page: Page) {
   await page.getByRole('button', { name: 'Save property', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Synthetic Rental Browser Villa', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Rooms & rentals', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Rooms & units', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Rooms & units', exact: true })).toBeVisible();await openAllRentals(page);
 }
+async function openAllRentals(page: Page) { const id = new URL(page.url()).hash.split('/')[1]; await page.goto(server.url+'/workspace/index.html#properties/'+id+'/rental'); await expect(page.getByRole('heading',{name:'Rooms & units',exact:true})).toBeVisible(); }
 async function open(page: Page, name: string) { await page.getByRole('button', { name, exact: true }).first().click(); return page.locator('#rental-dialog'); }
 async function save(dialog: Locator) { await dialog.getByRole('button', { name: 'Save record', exact: true }).click(); await expect(dialog).not.toBeVisible(); }
 async function room(page: Page, code: string) { const d = await open(page, 'Add room'); await d.getByLabel('Room code', { exact: true }).fill(code); await save(d); }
@@ -37,7 +38,7 @@ async function prepareRoomAgreement(page: Page) {
   d = await open(page, 'Add agreement');
   await d.getByLabel('Room / unit', { exact: true }).selectOption({ label: 'Synthetic Rental Browser Villa · QA-R01' });
   await d.getByLabel('Tenant', { exact: true }).selectOption({ label: 'Synthetic Browser Tenant' });
-  await d.getByLabel('Monthly rent', { exact: true }).fill('1000.00'); await d.getByLabel('Currency', { exact: true }).fill('QAR');
+  await d.getByLabel('Monthly rent', { exact: true }).fill('1000.00'); await expect(d.locator('input[name=currency]')).toHaveValue('QAR');
   await d.getByLabel('Due-date terms', { exact: true }).fill('Explicit amount due on owner-entered date');
   await d.getByLabel('Security deposit required', { exact: true }).fill('500.00');
   await d.getByLabel('Agreement start date', { exact: true }).fill('2026-10-01'); await save(d);
@@ -45,13 +46,13 @@ async function prepareRoomAgreement(page: Page) {
   await page.getByLabel('Occupancy / balance date', { exact: true }).fill('2026-10-15');
   await page.getByRole('button', { name: 'Apply rental filters', exact: true }).click();
   d = await open(page, 'Issue monthly due');
-  await d.getByLabel('Agreement', { exact: true }).selectOption({ index: 1 });
+  await d.getByLabel('Room / unit', { exact: true }).selectOption({ label: 'Synthetic Rental Browser Villa · QA-R01' }); await d.getByLabel('Tenant', { exact: true }).selectOption({ label: 'Synthetic Browser Tenant' });
   await d.getByLabel('Rent month', { exact: true }).fill('2026-10'); await d.getByLabel('Exact due date', { exact: true }).fill('2026-10-05');
   await d.getByLabel('Amount', { exact: true }).fill('1000.00'); await save(d);
 }
 async function collect(page: Page, purpose: string, method: string, amount: string) {
-  const d = await open(page, purpose === 'Rent' && method !== 'Cheque (pending only)' ? 'Collect rent' : 'Record collection');
-  await d.getByLabel('Agreement', { exact: true }).selectOption({ index: 1 });
+  if (purpose === 'Rent' && method !== 'Cheque (pending only)') await page.getByRole('region',{name:'Monthly rent dues',exact:true}).getByRole('button',{name:'Collect rent',exact:true}).first().click(); else await page.getByRole('button',{name:'Record collection',exact:true}).first().click();
+  const d=page.locator('#rental-dialog'); await d.getByLabel('Room / unit',{exact:true}).selectOption({label:'Synthetic Rental Browser Villa · QA-R01'}); await d.getByLabel('Tenant',{exact:true}).selectOption({label:'Synthetic Browser Tenant'}); await d.getByLabel('Rental month',{exact:true}).fill('2026-10');
   await d.getByLabel('Collection purpose', { exact: true }).selectOption({ label: purpose });
   await d.getByLabel('Payment method', { exact: true }).selectOption({ label: method });
   await d.getByLabel('Amount', { exact: true }).fill(amount); await d.getByLabel('Received date', { exact: true }).fill('2026-10-10');
@@ -72,7 +73,7 @@ test('Rental UI QA: full owner room/tenant/agreement/due/partial collection work
   await collect(page, 'Security deposit', 'Bank', '500.00'); await collect(page, 'Rent', 'Cheque (pending only)', '600.00');
   await expect(dues.getByRole('cell', { name: 'partial', exact: true })).toBeVisible();
   await collect(page, 'Rent', 'Bank', '600.00'); await expect(dues.getByRole('cell', { name: 'paid', exact: true })).toBeVisible();
-  await page.reload(); await page.getByRole('button', { name: 'Rooms & rentals', exact: true }).click();
+  await page.reload(); await page.getByRole('button', { name: 'Rooms & rentals', exact: true }).click(); await openAllRentals(page);
   // Reload restores the approved November entry default. This fixture's issued
   // due is explicitly October and must be selected to verify saved history.
   await page.getByLabel('Rent month', { exact: true }).fill('2026-10');
@@ -89,7 +90,7 @@ test('Rental UI QA: full owner room/tenant/agreement/due/partial collection work
   await expect(page.getByRole('region', { name: 'Monthly rental summary', exact: true })).toHaveCount(0);
   await nav(page, 'Villas & Properties');
   await page.getByRole('button', { name: 'Synthetic Rental Browser Villa', exact: true }).click();
-  await page.getByRole('button', { name: 'Rooms & rentals', exact: true }).click();
+  await page.getByRole('button', { name: 'Rooms & rentals', exact: true }).click(); await openAllRentals(page);
   await page.getByLabel('Rent month', { exact: true }).fill('2026-10');
   await page.getByLabel('Occupancy / balance date', { exact: true }).fill('2026-10-15');
   await page.getByRole('button', { name: 'Apply rental filters', exact: true }).click();
@@ -125,7 +126,7 @@ test('Rental UI QA: duplicate code and failed save retain input; logout clears p
 
 test('Rental CSRF recovery: expired proof preserves collection draft and requires Verify session then explicit Save', async ({ page }, info) => {
   await login(page);await prepareRoomAgreement(page);
-  const d=await open(page,'Collect rent');await d.getByLabel('Payment method',{exact:true}).selectOption('cash');await d.getByLabel('Amount',{exact:true}).fill('25.00');await d.getByLabel('Received date',{exact:true}).fill('2026-10-10');await d.getByLabel('Reference (optional)',{exact:true}).fill('SYNTHETIC-CSRF-RECOVERY');
+  await page.getByRole('region',{name:'Monthly rent dues',exact:true}).getByRole('button',{name:'Collect rent',exact:true}).first().click();const d=page.locator('#rental-dialog');await d.getByLabel('Payment method',{exact:true}).selectOption('cash');await d.getByLabel('Amount',{exact:true}).fill('25.00');await d.getByLabel('Received date',{exact:true}).fill('2026-10-10');await d.getByLabel('Reference (optional)',{exact:true}).fill('SYNTHETIC-CSRF-RECOVERY');
   const draft=await d.locator('form').evaluate(form=>Object.fromEntries(new FormData(form as HTMLFormElement)));
   const writes:{body:unknown;key:string;csrf:string}[]=[];
   page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/hamdee/v1/rental'){const headers=request.headers();writes.push({body:request.postDataJSON(),key:headers['idempotency-key'],csrf:headers['x-hamdee-csrf']});}});

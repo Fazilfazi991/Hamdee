@@ -9,7 +9,7 @@ Object.defineProperty(globalThis,'FormData',{configurable:true,value:class exten
 const daily=await import('../public/workspace/daily-dashboard.js');
 test.afterEach(()=>daily.resetDailyDashboard());
 test.after(()=>{for(const [name,value]of [['document',oldDocument],['window',oldWindow],['FormData',oldFormData]] as const){if(value)Object.defineProperty(globalThis,name,value);else Reflect.deleteProperty(globalThis,name);}});
-function row(currency='XTS'){
+function row(currency='QAR'){
  return{currency,totalCollected:'450',pendingCollection:'550',companyCash:'1850',companyBank:'1000',monthlyExpenses:'100',
  rent:{expected:'1000',allocated:'450',outstanding:'550',unappliedAdvances:'100',depositHeld:'500',pendingCheques:'600'},
  operations:{carCollected:'300',staffHeld:'700',pendingCheques:'650',pendingRentCheques:'600',pendingCarCheques:'50',upcomingAmount:'550',upcomingCount:1,nextDueDate:'2026-11-05' as string|null,overdueAmount:'0' as string|null,overdueCount:0,oldestOverdueDate:null as string|null},
@@ -40,24 +40,20 @@ test('Business overview shows five headline KPIs, three simultaneous charts and 
  assert.doesNotMatch(html,/<table|Recently updated properties|Total properties|PRIVATE-TENANT|PRIVATE-COLLECTOR|987654321/);
  assert.match(html,/Allocated to issued rent dues/);assert.match(html,/Separate balances/);assert.match(html,/Recorded property &amp; vehicle costs/);
  assert.match(html,/stroke-dasharray="45 100"/);assert.match(html,/2026[^<]*|Nov 2026/);
- assert.match(html,/<i class="overview-dot allocated"><\/i>Allocated to rent<\/dt><dd><span class="overview-money"><span class="overview-currency">XTS<\/span> 450\.00/);assert.match(html,/class="overview-issued-value"><span class="overview-money"><span class="overview-currency">XTS<\/span> 1,000\.00/);assert.match(html,/Property &amp; vehicle costs/);
+ assert.match(html,/<i class="overview-dot allocated"><\/i>Allocated to rent<\/dt><dd><span class="overview-money"><span class="overview-currency">QAR<\/span> 450\.00/);assert.match(html,/class="overview-issued-value"><span class="overview-money"><span class="overview-currency">QAR<\/span> 1,000\.00/);assert.match(html,/Property &amp; vehicle costs/);
 });
 
 test('Only the selected currency is presented; personal balances and currency combinations never enter totals',()=>{
  const data=dashboard();data.overview.currencies.push({...row('INR'),companyCash:'98765.43210001',totalCollected:'12345.67'});
- const initial=daily.dailyDashboardMarkup(data,'XTS'),selected=daily.dailyDashboardMarkup(data,'INR');
- assert.match(initial,/>XTS<\/span> 450\.00/);assert.doesNotMatch(initial,/98,765|12,345/);
- assert.match(selected,/>INR<\/span> 98,765\.43210001/);assert.match(selected,/>INR<\/span> 12,345\.67/);assert.doesNotMatch(selected,/>XTS<\/span>/);
- assert.match(selected,/<option value="INR" selected/);assert.doesNotMatch(initial+selected,/987654321\.89|Combined balance/);
+ const initial=daily.dailyDashboardMarkup(data,'QAR'),selected=daily.dailyDashboardMarkup(data,'INR');
+ assert.match(initial,/>QAR<\/span> 450\.00/);assert.doesNotMatch(initial,/98,765|12,345/);
+ assert.match(selected,/>INR<\/span> 98,765\.43210001/);assert.match(selected,/>INR<\/span> 12,345\.67/);assert.doesNotMatch(selected,/>QAR<\/span>/);
+ assert.doesNotMatch(initial+selected,/987654321\.89|Combined balance/);
 });
 
-test('Default currency prioritizes verified issued rent over an alphabetical account-only currency while preserving explicit selection',async()=>{
- const data=dashboard(),accountOnly={...row('INR'),companyCash:'2500',totalCollected:null,pendingCollection:null,rent:{...row().rent,expected:null,allocated:null,outstanding:null}};
- data.overview.currencies.unshift(accountOnly as unknown as ReturnType<typeof row>);
- const initial=daily.dailyDashboardMarkup(data);assert.match(initial,/<option value="XTS" selected/);assert.match(initial,/>XTS<\/span> 450\.00/);assert.doesNotMatch(initial,/>INR<\/span>/);
- const explicit=daily.dailyDashboardMarkup(data,'INR');assert.match(explicit,/<option value="INR" selected/);assert.match(explicit,/>INR<\/span> 2,500\.00/);assert.match(explicit,/No confirmed issued dues/);assert.doesNotMatch(explicit,/>XTS<\/span>/);
- const {target}=await render(data);assert.match(target.innerHTML,/<option value="XTS" selected/);
- target.handlers.get('[name="currency"]')?.({target:{value:'INR'}});assert.match(target.innerHTML,/<option value="INR" selected/);assert.match(target.innerHTML,/No confirmed issued dues/);
+test('QAR is the default and other currencies never leak into the overview',()=>{
+ const data=dashboard();data.overview.currencies=[row('INR')];const html=daily.dailyDashboardMarkup(data);
+ assert.doesNotMatch(html,/450\.00|INR<\/span>|Reporting currency/);assert.match(html,/Financial setup required/);
 });
 
 test('Unknown openings and no confirmed rental terms stay Not verified; a genuine confirmed zero remains zero',()=>{
@@ -65,12 +61,12 @@ test('Unknown openings and no confirmed rental terms stay Not verified; a genuin
  Object.assign(r,{companyCash:null,companyBank:null,totalCollected:null,pendingCollection:null,monthlyExpenses:'0'});Object.assign(r.rent,{expected:null,allocated:null,outstanding:null});
  const html=daily.dailyDashboardMarkup(data);
  assert.match(html,/Confirm room terms/);assert.match(html,/No confirmed issued dues/);assert((html.match(/overview-unverified/g)||[]).length>=6);
- assert.match(html,/Monthly Expenses[\s\S]*?XTS<\/span> 0\.00/);assert.doesNotMatch(html,/stroke-dasharray="45/);
+ assert.match(html,/Monthly Expenses[\s\S]*?QAR<\/span> 0\.00/);assert.doesNotMatch(html,/stroke-dasharray="45/);
 });
 
 test('An empty source response assumes no currency or bank opening and invents no historical trend bars',()=>{
  const data=dashboard();data.overview.currencies=[];const html=daily.dailyDashboardMarkup(data);
- assert.match(html,/No verified currency/);assert.match(html,/Not verified yet/);assert.match(html,/name="currency"[^>]*disabled/);
+ assert.match(html,/No entries yet/);assert.doesNotMatch(html,/name="currency"/);
  assert.doesNotMatch(html,/>QAR|overview-bar-receipts|NaN|Infinity/);
 });
 
@@ -99,22 +95,9 @@ test('Reading re-verifies owner access once, uses one aggregate request and clea
  route.abort();assert.equal(target.innerHTML,'');
 });
 
-test('Changing currency reuses the existing server aggregate without additional API or ledger requests and retains keyboard focus',async()=>{
- const data=dashboard();data.overview.currencies.push({...row('INR'),companyCash:'98765.43'});const {target,calls}=await render(data);
- target.handlers.get('[name="currency"]')?.({target:{value:'INR'}});assert.equal(calls.length,1);assert.match(target.innerHTML,/98,765\.43/);assert.equal(target.focused,'[name="currency"]');
-});
-
-test('Currency changes preserve unsubmitted date filters without relabelling the saved dataset or requesting another period',async()=>{
- const data=dashboard();data.overview.currencies.push({...row('INR'),companyCash:'98765.43'});const {target,calls}=await render(data);
- target.handlers.get('[name="currency"]')?.({target:{value:'INR',form:{values:{month:'2026-10',asOf:'2026-10-31',currency:'INR'}}}});
- assert.equal(target.querySelector('[name="month"]').value,'2026-10');assert.equal(target.querySelector('[name="asOf"]').value,'2026-10-31');
- assert.equal(calls.length,1);assert.deepEqual(calls[0],{month:'2026-11',asOf:'2026-11-05'});assert.match(target.innerHTML,/Issued rent dues · Nov 2026/);
- assert.match(target.innerHTML,/98,765\.43/);assert.equal(target.focused,'[name="currency"]');
-});
-
 test('Chosen month and cutoff are sent explicitly; changing them does not write or reclassify receipts',async()=>{
  const data=dashboard(),{target,calls}=await render(data);
- target.handlers.get('[data-daily-filters]')?.({preventDefault(){},target:{values:{month:'2026-10',asOf:'2026-10-31',currency:'XTS'}}});
+ target.handlers.get('[data-daily-filters]')?.({preventDefault(){},target:{values:{month:'2026-10',asOf:'2026-10-31',currency:'QAR'}}});
  await Promise.resolve();await Promise.resolve();assert.deepEqual(calls[1],{month:'2026-10',asOf:'2026-10-31'});
 });
 
@@ -127,10 +110,10 @@ test('Malformed summaries, cross-period replies and unauthorized responses never
 });
 
 test('Untrusted server basis is escaped and all three charts expose exact accessible descriptions',()=>{
- const data=dashboard();data.overview.basis.totalCollected='<img src=x onerror=alert(1)>';const html=daily.dailyDashboardMarkup(data,'XTS');
+ const data=dashboard();data.overview.basis.totalCollected='<img src=x onerror=alert(1)>';const html=daily.dailyDashboardMarkup(data,'QAR');
  assert.match(html,/&lt;img src=x onerror=alert\(1\)&gt;/);assert.doesNotMatch(html,/<img src=x/);assert.equal((html.match(/role="img" aria-label=/g)||[]).length,3);assert.match(html,/<details><summary>Reporting basis<\/summary>/);
- assert.match(html,/aria-describedby="overview-activity-description"/);assert.match(html,/<desc id="overview-activity-description">Oct 2026: XTS 550\.00 cash\/bank receipts; XTS 200\.00 recorded costs\./);
- assert.match(html,/>Exact monthly values<\/summary>/);assert.match(html,/XTS · top 550\.00/);assert.match(html,/class="overview-activity-month"[^>]*>Oct26<\/text>/);assert.match(html,/<desc id="overview-funds-description">Company cash: XTS 1,850\.00; Company bank: XTS 1,000\.00; Held by collectors: XTS 700\.00/);
+ assert.match(html,/aria-describedby="overview-activity-description"/);assert.match(html,/<desc id="overview-activity-description">Oct 2026: QAR 550\.00 cash\/bank receipts; QAR 200\.00 recorded costs\./);
+ assert.match(html,/>Exact monthly values<\/summary>/);assert.match(html,/QAR · top 550\.00/);assert.match(html,/class="overview-activity-month"[^>]*>Oct26<\/text>/);assert.match(html,/<desc id="overview-funds-description">Company cash: QAR 1,850\.00; Company bank: QAR 1,000\.00; Held by collectors: QAR 700\.00/);
 });
 
 test('Funds comparison keeps cash, bank and custody separate without an invented total, income or personal balance',()=>{
@@ -138,15 +121,15 @@ test('Funds comparison keeps cash, bank and custody separate without an invented
  assert.equal((html.match(/class="overview-funds-column (?:cash|bank|staff)"/g)||[]).length,3);
  for(const label of ['Company cash','Company bank','Held by collectors'])assert(html.includes(label));
  for(const value of ['1,850.00','1,000.00','700.00'])assert(html.includes(value));
- assert.match(html,/Separate locations · not income or available profit/);assert.doesNotMatch(html,/3,550|free cash|PERSONAL|987654321|overview-trend-empty/);
+ assert.match(html,/Separate balances · not income or profit/);assert.doesNotMatch(html,/3,550|free cash|PERSONAL|987654321|overview-trend-empty/);
 });
 
 test('Funds comparison preserves negative exact balances and unknown values instead of clipping them into positive or zero balances',()=>{
  const data=dashboard();data.overview.currencies[0].companyCash='0';data.overview.currencies[0].companyBank='-125.123456789';Object.assign(data.overview.currencies[0].operations,{staffHeld:null});
  const html=daily.dailyDashboardMarkup(data),funds=html.split('overview-funds-card')[1].split('overview-activity-card')[0];
- assert.match(funds,/bank negative/);assert.match(funds,/Negative balance shown below zero/);assert.match(funds,/-125\.123456789/);assert.match(funds,/>XTS<\/span> 0\.00/);assert.match(funds,/Not verified/);
+ assert.match(funds,/bank negative/);assert.match(funds,/Negative balance shown below zero/);assert.match(funds,/-125\.123456789/);assert.match(funds,/>QAR<\/span> 0\.00/);assert.match(funds,/Not verified/);
  const bank=funds.split('overview-funds-column bank negative')[1].split('</g>')[0];assert.match(bank,/<rect x="153" y="14" width="50" height="132"/);
- const staff=funds.split('overview-funds-column staff')[1].split('</g>')[0];assert.doesNotMatch(staff,/<rect/);
+ const staff=funds.split('overview-funds-column staff')[1].split('</g>')[0];assert.match(staff,/overview-placeholder-track/);assert.doesNotMatch(staff,/<title>/);
 });
 
 test('Three charts are immediately visible from one summary read, without a toggle or extra API request',async()=>{
@@ -158,13 +141,13 @@ test('Six supplied activity months render exactly six readable short ticks and p
  const data=dashboard();data.overview.currencies[0].trend=['06','07','08','09','10','11'].map((month,index)=>({month:'2026-'+month,collections:String(index+1)+'.123456789',expenses:String(index)+'.000000001'}));
  const html=daily.dailyDashboardMarkup(data),activity=html.split('overview-activity-card')[1].split('</section>')[0];
  assert.equal((activity.match(/class="overview-bar-receipts"/g)||[]).length,6);assert.equal((activity.match(/class="overview-bar-expenses"/g)||[]).length,6);assert.equal((activity.match(/class="overview-activity-month"/g)||[]).length,6);
- assert.match(activity,/>Sep26<\/text>/);assert.match(activity,/Sept 2026: XTS 4\.123456789 cash\/bank receipts; XTS 3\.000000001 recorded costs/);assert.match(activity,/viewBox="0 0 360 180"/);
+ assert.match(activity,/>Sep26<\/text>/);assert.match(activity,/Sept 2026: QAR 4\.123456789 cash\/bank receipts; QAR 3\.000000001 recorded costs/);assert.match(activity,/viewBox="0 0 360 180"/);
  assert.match(activity,/6 activity months/);assert.doesNotMatch(activity,/Dec26|4\.12<|3\.00</);
 });
 
 test('No activity creates only a compact setup state, while verified funds and rent remain visible',async()=>{
  const data=dashboard();data.overview.currencies[0].trendReady=false;data.overview.currencies[0].trend=[];
- const {target,calls}=await render(data);assert.match(target.innerHTML,/Recorded Activity/);assert.match(target.innerHTML,/Not verified yet/);assert.match(target.innerHTML,/Company Funds/);assert.match(target.innerHTML,/1,850\.00/);assert.doesNotMatch(target.innerHTML,/class="overview-bar-receipts"|overview-trend-empty/);assert.equal(calls.length,1);
+ const {target,calls}=await render(data);assert.match(target.innerHTML,/Recorded Activity/);assert.match(target.innerHTML,/No entries yet/);assert.match(target.innerHTML,/Company Funds/);assert.match(target.innerHTML,/1,850\.00/);assert.doesNotMatch(target.innerHTML,/class="overview-bar-receipts"|overview-trend-empty/);assert.equal(calls.length,1);
 });
 
 test('Overdue visibility uses server amount, count and oldest date rather than recalculating due status in the client',()=>{
@@ -184,7 +167,16 @@ test('Dashboard route no longer requests duplicate property metadata or lists vi
  const branch=app.split("}else if(route==='dashboard'&&managed){")[1].split("}else if(['expenses'")[0];
  assert.doesNotMatch(branch,/api\.dashboard|Total properties|Recently updated|table\(/);assert.match(branch,/renderDailyDashboard/);assert.match(app,/main\.classList\.toggle\('business-overview-page'/);
  for(const width of ['1100px','850px','640px'])assert(css.includes('max-width:'+width));assert.match(css,/\.overview-kpis\{display:grid;grid-template-columns:repeat\(5/);
- const compact=css.split('@media(min-width:1100px) and (max-height:950px)')[1]?.split('\n')[0];assert(compact);assert.match(compact,/\.overview-donut\{width:128px;height:128px\}/);assert.match(compact,/\.overview-bar-chart\{height:116px;min-height:116px/);assert.doesNotMatch(compact,/display:none|overflow:hidden|font-size:[1-8]px/);
- assert.match(css,/@media\(max-width:640px\)\{\.overview-chart-month-full\{display:none\}\.overview-chart-month-short\{display:block;font-size:22px\}\.overview-chart-scale\{font-size:22px\}\}/);
+ const compact=css.split('@media(min-width:1100px) and (max-height:850px)')[1]?.split('\n')[0];assert(compact);assert.match(compact,/min-height:310px/);assert.match(compact,/height:158px/);assert.doesNotMatch(compact,/display:none|overflow:hidden|font-size:[1-8]px/);
+ assert.match(css,/\.overview-kpi:nth-child\(4\)/);assert.match(css,/\.overview-chart-card\{display:flex;flex-direction:column/);
+
  assert.doesNotMatch(css,/\.overview[^\n]*(?:animation:|transition:all)/);
+});
+
+test('Missing financial figures use one setup notice, accessible dashes and unscaled chart placeholders rather than repeated warnings or invented zero amounts',()=>{
+ const data=dashboard();data.overview.currencies=[];const html=daily.dailyDashboardMarkup(data);
+ assert.equal((html.match(/class="overview-setup-notice"/g)||[]).length,1);
+ assert.match(html,/aria-label="Not verified"[^>]*>—<\/span>/);assert.match(html,/Confirm rent terms →/);assert.match(html,/Set opening balances →/);
+ assert.match(html,/No entries yet/);assert.doesNotMatch(html,/>Not verified<|overview-funds-zero-label|overview-bar-receipts|overview-donut-allocated/);
+ assert.match(html,/No financial values are plotted/);assert.match(html,/href="#properties"[^>]*>[^<]*|Record collection/);
 });

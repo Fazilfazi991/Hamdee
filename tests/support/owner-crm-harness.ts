@@ -207,7 +207,7 @@ export async function startOwnerNativeCluster(runtime: { bin: string; archiveSha
 }
 
 const assetPaths = new Set(['workspace/index.html', 'workspace/adapter.js', 'workspace/app.js', 'workspace/rental.js', 'workspace/expenses.js', 'workspace/foundation.css',
-  'workspace/staff-collections.js','workspace/company-finance.js','workspace/car-rentals.js','workspace/personal-finance.js','workspace/partners.js','workspace/daily-dashboard.js',
+  'workspace/documents.js','workspace/staff-collections.js','workspace/company-finance.js','workspace/car-rentals.js','workspace/personal-finance.js','workspace/partners.js','workspace/daily-dashboard.js',
   'login.html','login.js','login.css',
   'shared/styles.css', 'shared/icons.js', 'shared/hamdee-logo.png', 'shared/inter-latin.woff2']);
 export type OwnerQaHttpHandler = (request: Request) => Promise<Response>;
@@ -225,13 +225,16 @@ export async function startOwnerLoopbackHarness(assetRoot: string,
       if (pathname.startsWith('/api/hamdee/')) {
         if (!handler) { res.writeHead(503).end('QA application unavailable'); return; }
         const chunks: Buffer[] = []; let length = 0;
-        for await (const chunk of req) { const bytes = Buffer.from(chunk); length += bytes.length; if (length > 32768) { res.writeHead(413).end(); return; } chunks.push(bytes); }
+        // Match DOCUMENT_MAX_JSON_BYTES in src/documents.ts for uploads only;
+        // every other API retains the existing 32 KiB transport bound.
+        const limit = pathname === '/api/hamdee/v1/documents' && req.method === 'POST' ? 1_408_000 : 32_768;
+        for await (const chunk of req) { const bytes = Buffer.from(chunk); length += bytes.length; if (length > limit) { res.writeHead(413).end(); return; } chunks.push(bytes); }
         const headers = new Headers(); for (const [name, value] of Object.entries(req.headers)) if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value);
         const response = await handler(new Request(origin + req.url, { method: req.method, headers,
           ...(chunks.length ? { body: Buffer.concat(chunks) } : {}) }));
         const outgoing = Object.fromEntries(response.headers) as Record<string, string | string[]>;
         const cookies = response.headers.getSetCookie(); if (cookies.length) outgoing['set-cookie'] = cookies;
-        res.writeHead(response.status, outgoing); res.end(await response.text()); return;
+        res.writeHead(response.status, outgoing); res.end(Buffer.from(await response.arrayBuffer())); return;
       }
       let file = pathname.slice(1);
       if(['/','/login','/login.html','/workspace','/workspace/','/workspace/index.html'].includes(pathname)){

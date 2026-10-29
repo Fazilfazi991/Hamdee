@@ -111,7 +111,7 @@ test('Standalone login has no CRM sidebar, hardcoded identity, MFA prompt or loc
 });
 test('Quick collection UI uses existing explicit commands and does not submit collection-month or confirmation fields as financial rules',async()=>{
  const source=await readFile(new URL('../public/workspace/rental.js',import.meta.url),'utf8'),app=await readFile(new URL('../public/workspace/app.js',import.meta.url),'utf8');
- assert.match(source,/Collect room rent','quick-room'/);assert.match(source,/Collection month','month'/);assert.match(source,/Confirm agreement terms/);
+ assert.match(source,/Collect rent','quick-room'/);assert.match(source,/Collection month','month'/);assert.match(source,/Confirm tenant and rent details/);
  assert.match(source,/requiresTermsConfirmation/);assert.match(source,/delete body\.confirmTerms/);
  assert.match(source,/state\.action==='quick-month'/);assert.match(source,/Company cash or bank placement is a separate confirmed step/);
  assert.match(app,/window\.location\.replace\('\/login'\)/);assert.match(app,/pageshow/);assert.match(app,/event\.persisted/);
