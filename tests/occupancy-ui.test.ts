@@ -50,6 +50,8 @@ test('Villa tenant screen includes historical snapshot contacts and excludes unr
   const tenantTable = html.split('aria-label="Tenant register"')[1].split('</table>')[0];
   assert.match(tenantTable, /DEMO historical &lt;img src=x&gt;/);
   assert.doesNotMatch(tenantTable, /DEMO unrelated contact/);
+  assert.doesNotMatch(tenantTable, /DEMO snapshot contact|<th>Notes<\/th>/);
+  assert.match(tenantTable, /Edit tenant/);
   assert.match(html, /does not create an agreement or confirm current occupancy/);
 });
 
