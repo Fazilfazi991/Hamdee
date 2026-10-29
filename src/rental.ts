@@ -23,6 +23,9 @@ export class RentalService {
     return this.properties.ownerContext(identity,async sql=>{
       const select=async(table:string,field='property_id')=>(await sql.query<Row>(`SELECT * FROM hamdee_private.${table} ${field?'WHERE ($1::uuid IS NULL OR '+field+'=$1)':''} ORDER BY id`,field?[propertyId]:[])).rows;
       const rooms=await select('rooms'),agreements=await select('rental_agreements'),tenants=await select('tenants','');
+      const occupancyAvailable=Boolean((await sql.query<{ready:boolean}>("SELECT to_regclass('hamdee_private.room_occupancy_confirmations') IS NOT NULL AND to_regclass('hamdee_private.source_roster_confirmations') IS NOT NULL AS ready")).rows[0]?.ready);
+      const occupancyHistory=occupancyAvailable?await select('room_occupancy_confirmations'):[];
+      const sourceConfirmations=occupancyAvailable?(await sql.query<Row>(`SELECT s.* FROM hamdee_private.source_roster_confirmations s LEFT JOIN hamdee_private.rooms r ON r.id=s.room_id WHERE ($1::uuid IS NULL OR r.property_id=$1 OR s.room_id IS NULL) ORDER BY s.id`,[propertyId])).rows:[];
       // Use immutable creation profiles/command results so routine display-name,
       // room-code and contact-note edits cannot rewrite imported source history.
       const properties=(await sql.query<Row>(`SELECT property_id AS id,profile->>'name' AS name FROM hamdee_private.property_revisions WHERE version=1 AND ($1::uuid IS NULL OR property_id=$1)`,[propertyId])).rows;
@@ -49,10 +52,21 @@ export class RentalService {
         if(c.kind==='advance'){g.advanceMinor+=availableAdvance(c);}
         if(c.kind==='deposit')g.depositMinor+=amount;if(c.kind==='deposit_refund')g.depositMinor-=amount;
       }
-      const roomViews=rooms.map(room=>({...view(room),occupancy:agreements.some(a=>a.room_id===room.id&&day(a.start_date)<=asOf&&(!a.end_date||day(a.end_date)>=asOf))?'occupied':'unknown',
-        historicalOccupants:historical.get(String(room.id))?.historicalOccupants??[],historicalOccupancyReviewRequired:historical.get(String(room.id))?.historicalOccupancyReviewRequired??false}));
-      return {rooms:roomViews,tenants:tenants.map(view),agreements:agreements.map(view),dues:dues.map(d=>({...view(d),status:BigInt(String(d.outstanding_minor))===0n?'paid':BigInt(String(d.paid_minor))>0n?'partial':'pending'})),collections:collections.map(c=>({...view(c),...(c.kind==='advance'&&c.status==='recorded'&&day(c.received_date)<=asOf?{availableAdvanceMinor:String(availableAdvance(c))}:{})})),allocations:allocations.map(view),history:history.map(view),
-        summary:{totalRooms:rooms.length,occupiedRooms:roomViews.filter(r=>r.occupancy==='occupied').length,vacantRooms:0,unverifiedRooms:roomViews.filter(r=>r.occupancy==='unknown').length,currencies:[...summaries].map(([currency,values])=>({currency,...Object.fromEntries(Object.entries(values).map(([k,v])=>[k,String(v)]))}))}};
+      const roomViews=rooms.map(room=>{
+        const history=occupancyHistory.filter(c=>c.room_id===room.id).sort((a,b)=>Number(a.version)-Number(b.version));
+        const confirmation=history.filter(c=>day(c.effective_date)<=asOf).at(-1);
+        const agreement=agreements.find(a=>a.room_id===room.id&&day(a.start_date)<=asOf&&(!a.end_date||day(a.end_date)>=asOf));
+        // Ended/newer rental terms must not resurrect an older occupant or vacancy.
+        const superseded=confirmation&&agreements.some(a=>a.room_id===room.id&&day(a.start_date)<=asOf&&
+          (day(a.start_date)>day(confirmation.effective_date)||(a.id===confirmation.agreement_id&&a.end_date&&day(a.end_date)<asOf)));
+        const effectiveConfirmation=superseded?undefined:confirmation;
+        return {...view(room),occupancy:agreement?'occupied':effectiveConfirmation?.status??'unknown',occupancyVersion:history.at(-1)?.version??0,
+          currentTenantId:agreement?.tenant_id??effectiveConfirmation?.tenant_id??null,occupancyConfirmation:confirmation?{...view(confirmation),internalAgreementId:confirmation.agreement_id}:null,
+          occupancyHistory:history.map(c=>({...view(c),internalAgreementId:c.agreement_id})),
+          historicalOccupants:historical.get(String(room.id))?.historicalOccupants??[],historicalOccupancyReviewRequired:historical.get(String(room.id))?.historicalOccupancyReviewRequired??false};
+      });
+      return {rooms:roomViews,tenants:tenants.map(view),agreements:agreements.map(view),dues:dues.map(d=>({...view(d),status:BigInt(String(d.outstanding_minor))===0n?'paid':BigInt(String(d.paid_minor))>0n?'partial':'pending'})),collections:collections.map(c=>({...view(c),...(c.kind==='advance'&&c.status==='recorded'&&day(c.received_date)<=asOf?{availableAdvanceMinor:String(availableAdvance(c))}:{})})),allocations:allocations.map(view),history:history.map(view),occupancyAvailable,sourceConfirmations:sourceConfirmations.map(view),
+        summary:{totalRooms:rooms.length,occupiedRooms:roomViews.filter(r=>r.occupancy==='occupied').length,vacantRooms:roomViews.filter(r=>r.occupancy==='vacant').length,unverifiedRooms:roomViews.filter(r=>r.occupancy==='unknown').length,currencies:[...summaries].map(([currency,values])=>({currency,...Object.fromEntries(Object.entries(values).map(([k,v])=>[k,String(v)]))}))}};
     });
   }
   async mutate(identity:Identity,input:unknown,key:string,requestId:string) {
@@ -62,9 +76,11 @@ export class RentalService {
       'create-room':['propertyId','code','label'],'update-room':['roomId','expectedVersion','code','label'],
       'create-tenant':['name','phone','email','notes'],'update-tenant':['tenantId','expectedVersion','name','phone','email','notes'],
       'create-agreement':['roomId','tenantId','monthlyRent','currency','depositRequired','dueTerms','startDate','endDate','previousAgreementId'],
-      'end-agreement':['agreementId','expectedVersion','endDate'],'issue-due':['agreementId','period','dueDate','amount'],
-      'record-collection':['agreementId','kind','method','amount','receivedDate','reference','allocations'],
-      'allocate-advance':['collectionId','dueId','amount','allocationDate'],'refund-deposit':['agreementId','amount','receivedDate','method','reference']};
+      'confirm-occupancy':['roomId','tenantId','status','effectiveDate','expectedOccupancyVersion','notes','terms'],
+      'confirm-source-reference':['roomId','tenantId','sourceSha256','sourceReference','period','notes'],
+      'end-agreement':['agreementId','roomId','tenantId','period','expectedVersion','endDate'],'issue-due':['agreementId','roomId','tenantId','period','dueDate','amount'],
+      'record-collection':['agreementId','roomId','tenantId','period','kind','method','amount','receivedDate','reference','allocations'],
+      'allocate-advance':['collectionId','dueId','amount','allocationDate'],'refund-deposit':['agreementId','roomId','tenantId','period','amount','receivedDate','method','reference']};
     const action=String(b.action);check(Object.hasOwn(fields,action)&&Object.keys(b).every(k=>k==='action'||fields[action].includes(k)),'Unknown operation or fields.');
     const digest=createHash('sha256').update(canonical(b)).digest('hex');
     return this.properties.ownerContext(identity,async(sql,actorId)=>{
@@ -72,18 +88,26 @@ export class RentalService {
       const saved=(await sql.query<{digest:string;result:Row}>('SELECT digest,result FROM hamdee_private.rental_commands WHERE actor_id=$1 AND key=$2',[actorId,key])).rows[0];
       if(saved){check(saved.digest===digest,'Use a new key for a changed submission.','IDEMPOTENCY_KEY_REUSED',409);return {...saved.result,replay:true};}
       const get=async(kind:keyof typeof tables,value:unknown)=>{const row=(await sql.query<Row>(`SELECT * FROM hamdee_private.${tables[kind]} WHERE id=$1`,[id(value)])).rows[0];check(row,'Record not found.','NOT_FOUND',404);return row;};
+      const resolveAgreement=async()=>{
+        if(b.agreementId!==undefined){check(b.roomId===undefined&&b.tenantId===undefined,'Choose one internal rental terms reference.');return get('agreement',b.agreementId);}
+        const room=id(b.roomId),tenant=id(b.tenantId),period=month(b.period);
+        const found=(await sql.query<Row>(`SELECT * FROM hamdee_private.rental_agreements WHERE room_id=$1 AND tenant_id=$2 AND to_char(start_date,'YYYY-MM')<=$3 AND (end_date IS NULL OR to_char(end_date,'YYYY-MM')>=$3) ORDER BY start_date,id`,[room,tenant,period])).rows;
+        check(found.length===1,found.length?'More than one rental terms record covers this room, tenant and month. Confirm the exact terms before proceeding.':'Confirm rental terms and their effective date before recording dues or collections.',found.length?'RENTAL_TERMS_AMBIGUOUS':'RENTAL_TERMS_REQUIRED',409);
+        return found[0];
+      };
       let propertyId:string|null=null,roomId:string|null=null,entityId:string=randomUUID(),data:Row;const eventId=randomUUID();
       let parent:Row|undefined;
       if(action==='create-room')propertyId=id(b.propertyId);
-      else if(action==='update-room'||action==='create-agreement'){parent=await get('room',b.roomId);propertyId=String(parent.property_id);roomId=String(parent.id);}
+      else if(['update-room','create-agreement','confirm-occupancy'].includes(action)){parent=await get('room',b.roomId);propertyId=String(parent.property_id);roomId=String(parent.id);}
+      else if(action==='confirm-source-reference'&&b.roomId){parent=await get('room',b.roomId);propertyId=String(parent.property_id);roomId=String(parent.id);}
       else if(action==='allocate-advance'){parent=await get('collection',b.collectionId);propertyId=String(parent.property_id);roomId=String(parent.room_id);}
-      else if(['end-agreement','issue-due','record-collection','refund-deposit'].includes(action)){parent=await get('agreement',b.agreementId);propertyId=String(parent.property_id);roomId=String(parent.room_id);}
+      else if(['end-agreement','issue-due','record-collection','refund-deposit'].includes(action)){parent=await resolveAgreement();propertyId=String(parent.property_id);roomId=String(parent.room_id);}
       if(propertyId){
         await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['property:'+propertyId]);
         const p=(await sql.query<Row>('SELECT id,lifecycle_status FROM hamdee_private.properties WHERE id=$1',[propertyId])).rows[0];check(p,'Property not found.','NOT_FOUND',404);check(p.lifecycle_status==='registered','Restore the property before adding or changing rental records.','PROPERTY_ARCHIVED',409);
-        if(action==='update-room'||action==='create-agreement')parent=await get('room',b.roomId);
+        if(['update-room','create-agreement','confirm-occupancy','confirm-source-reference'].includes(action))parent=await get('room',b.roomId);
         else if(action==='allocate-advance')parent=await get('collection',b.collectionId);
-        else if(action!=='create-room')parent=await get('agreement',b.agreementId);
+        else if(action!=='create-room')parent=await resolveAgreement();
       }
       const insert=async(table:string,values:Row)=>{const entries=Object.entries(values);return (await sql.query<Row>(`INSERT INTO hamdee_private.${table}(${entries.map(([k])=>k).join(',')}) VALUES(${entries.map((_,i)=>'$'+(i+1)).join(',')}) RETURNING *`,entries.map(([,v])=>v))).rows[0];};
       const version=(row:Row)=>check(Number.isInteger(b.expectedVersion)&&b.expectedVersion===row.version,'This record changed. Reload before saving.','VERSION_CONFLICT',412);
@@ -96,7 +120,40 @@ export class RentalService {
         check(BigInt(n)+BigInt(used.receipt)<=BigInt(String(collection.amount_minor))&&BigInt(n)+BigInt(used.due)<=BigInt(String(due.amount_minor)),'Allocation exceeds available credit or pending rent.','ALLOCATION_EXCEEDED',409);
         return insert('rent_allocations',{id:randomUUID(),collection_id:collection.id,due_id:due.id,agreement_id:collection.agreement_id,currency:collection.currency,amount_minor:n,allocated_date:allocatedDate,event_id:eventId});
       };
-      if(action==='create-room'||action==='update-room'){
+      if(action==='confirm-source-reference'||action==='confirm-occupancy'){
+        check((await sql.query<{ready:boolean}>("SELECT to_regclass('hamdee_private.room_occupancy_confirmations') IS NOT NULL AND to_regclass('hamdee_private.source_roster_confirmations') IS NOT NULL AS ready")).rows[0]?.ready,'Owner occupancy confirmation is not enabled in this database.','OCCUPANCY_UNAVAILABLE',503);
+        if(action==='confirm-source-reference'){
+          await get('tenant',b.tenantId);const sha=text(b.sourceSha256,64),period=month(b.period),reference=text(b.sourceReference,500);
+          check(/^[0-9a-f]{64}$/.test(sha),'Use the exact original source SHA-256.');
+          await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['source-roster:'+sha+':'+period+':'+b.tenantId+':'+(roomId??'contact')]);
+          check(!(await sql.query('SELECT id FROM hamdee_private.source_roster_confirmations WHERE source_sha256=$1 AND period=$2 AND tenant_id=$3 AND room_id IS NOT DISTINCT FROM $4::uuid',[sha,period,b.tenantId,roomId])).rows.length,'This source reference is already confirmed.','SOURCE_ALREADY_CONFIRMED',409);
+          data=await insert('source_roster_confirmations',{id:entityId,tenant_id:b.tenantId,room_id:roomId,source_sha256:sha,source_reference:reference,period,notes:text(b.notes??'',1000,false),event_id:eventId});
+        }else{
+          const effective=date(b.effectiveDate),status=String(b.status);check(['occupied','vacant','unknown'].includes(status),'Choose occupied, vacant or occupancy not verified.');
+          check(status==='occupied'?Boolean(b.tenantId):b.tenantId===undefined||b.tenantId===null,'Only an occupied room may have a confirmed tenant.');
+          const tenant=status==='occupied'?await get('tenant',b.tenantId):null;
+          const previous=(await sql.query<Row>('SELECT * FROM hamdee_private.room_occupancy_confirmations WHERE room_id=$1 ORDER BY version DESC LIMIT 1',[roomId])).rows[0];
+          check(Number.isInteger(b.expectedOccupancyVersion)&&b.expectedOccupancyVersion===(previous?.version??0),'Room occupancy changed. Reload before saving.','VERSION_CONFLICT',412);
+          check(!previous||effective>=day(previous.effective_date),'A new confirmation cannot predate the latest confirmation. Add a dated correction without rewriting history.','OCCUPANCY_DATE_CONFLICT',409);
+          const active=(await sql.query<Row>('SELECT * FROM hamdee_private.rental_agreements WHERE room_id=$1 AND start_date<=$2::date AND (end_date IS NULL OR end_date>=$2::date)',[roomId,effective])).rows;
+          check(!active.length||(status==='occupied'&&active.every(a=>a.tenant_id===tenant?.id)),'End conflicting rental terms with an explicit date before changing the occupant or vacancy.','TERMS_CONFLICT',409);
+          let agreement=active[0]??null;
+          if(b.terms!==undefined&&b.terms!==null){
+            check(status==='occupied'&&typeof b.terms==='object'&&!Array.isArray(b.terms),'Only an occupied room may have confirmed rental terms.');
+            const terms=b.terms as Row;check(Object.keys(terms).every(k=>['monthlyRent','currency','depositRequired','dueTerms','endDate'].includes(k)),'Unknown rental terms fields.');
+            const monthly=money(terms.monthlyRent),deposit=terms.depositRequired===undefined||terms.depositRequired===null?null:money(terms.depositRequired,true),currency=text(terms.currency,3),dueTerms=text(terms.dueTerms,200),end=terms.endDate?date(terms.endDate):null;
+            check(/^[A-Z]{3}$/.test(currency)&&(!end||end>=effective),'Check the currency and rental term end date.');
+            if(agreement){
+              check(String(agreement.monthly_rent_minor)===monthly&&(terms.depositRequired===undefined||(agreement.deposit_required_minor===null?null:String(agreement.deposit_required_minor))===deposit)&&agreement.currency===currency&&agreement.due_terms===dueTerms&&(terms.endDate===undefined||day(agreement.end_date??'')===(end??'')),'Existing rental terms differ. End the old terms and explicitly confirm the replacement.','TERMS_CONFLICT',409);
+            }else{
+              check(!(await sql.query('SELECT id FROM hamdee_private.rental_agreements WHERE room_id=$1 AND start_date<=coalesce($2::date,\'infinity\'::date) AND coalesce(end_date,\'infinity\'::date)>=$3::date',[roomId,end,effective])).rows.length,'The confirmed term dates overlap existing rental terms.','TERMS_CONFLICT',409);
+              agreement=await insert('rental_agreements',{id:randomUUID(),property_id:propertyId,room_id:roomId,tenant_id:tenant!.id,start_date:effective,end_date:end,monthly_rent_minor:monthly,deposit_required_minor:deposit,currency,due_terms:dueTerms,previous_agreement_id:null,event_id:eventId});
+            }
+          }
+          data=await insert('room_occupancy_confirmations',{id:entityId,property_id:propertyId,room_id:roomId,tenant_id:tenant?.id??null,status,effective_date:effective,version:Number(previous?.version??0)+1,notes:text(b.notes??'',1000,false),agreement_id:agreement?.id??null,event_id:eventId});
+          data={...data,internal_agreement_id:agreement?.id??null};
+        }
+      }else if(action==='create-room'||action==='update-room'){
         const code=text(b.code,40).toUpperCase();check(/^[A-Z0-9][A-Z0-9._ -]*$/.test(code),'Use a room code containing letters, numbers, spaces, dots or hyphens.');
         const label=text(b.label??'',200,false);const exists=(await sql.query('SELECT id FROM hamdee_private.rooms WHERE property_id=$1 AND code=$2 AND id<>$3',[propertyId,code,parent?.id??entityId])).rows;
         check(!exists.length,'This property already has that room code.','DUPLICATE_ROOM',409);
@@ -120,6 +177,8 @@ export class RentalService {
         entityId=String(parent!.id);data=(await sql.query<Row>('UPDATE hamdee_private.rental_agreements SET end_date=$2,version=version+1,event_id=$3 WHERE id=$1 AND version=$4 RETURNING *',[entityId,end,eventId,b.expectedVersion])).rows[0];
       }else if(action==='issue-due'){
         const period=month(b.period),dueDate=date(b.dueDate);check(dueDate.slice(0,7)===period,'Due date must be in the selected month.');
+        if(b.agreementId===undefined)check(money(b.amount)===String(parent!.monthly_rent_minor),'The monthly due must match the owner-confirmed monthly rent. Confirm corrected rental terms before issuing a different amount.','DUE_TERMS_MISMATCH',409);
+        if(b.agreementId===undefined)check(dueDate>=day(parent!.start_date)&&(!parent!.end_date||dueDate<=day(parent!.end_date)),'The due date must fall within the confirmed rental terms.','DUE_OUTSIDE_TERMS',409);
         check(day(parent!.start_date).slice(0,7)<=period&&(!parent!.end_date||day(parent!.end_date).slice(0,7)>=period),'Agreement does not cover this month.');
         check(!(await sql.query('SELECT id FROM hamdee_private.rent_dues WHERE agreement_id=$1 AND period=$2',[parent!.id,period])).rows.length,'A due already exists for this agreement and month.','DUPLICATE_DUE',409);
         const tenant=await get('tenant',parent!.tenant_id),room=await get('room',roomId);

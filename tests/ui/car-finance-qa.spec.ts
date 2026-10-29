@@ -20,10 +20,16 @@ async function login(page: Page) {
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Business Overview', exact: true, level: 1 })).toBeVisible();
 }
+async function openCar(page: Page) {
+  const list = page.getByRole('region', { name: 'Vehicle register', exact: true }); await expect(list).toBeVisible();
+  const button = list.getByRole('button', { name: 'Open vehicle', exact: true }).first();
+  if (await button.count()) { await button.click(); await expect(page.getByRole('region', { name: 'Vehicle rental terms', exact: true })).toBeVisible(); }
+}
 async function nav(page: Page, label: string) {
   const menu = page.getByRole('button', { name: 'Open navigation', exact: true });
   if (await menu.isVisible() && await menu.getAttribute('aria-expanded') !== 'true') await menu.click();
   await page.locator('#navigation').getByRole('link', { name: label, exact: true }).click();
+  if (label === 'Car Rentals') await openCar(page);
 }
 async function command(module: string, body: unknown) {
   const response = await server.fixture.request('POST', api + '/' + module + '/commands', body, { 'Idempotency-Key': randomUUID() });
@@ -49,7 +55,7 @@ async function opening(page: Page, name: string) {
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('Account name', { exact: true }).fill(name);
   await dialog.getByLabel('Account type', { exact: true }).selectOption('cash');
-  await dialog.getByLabel('Currency', { exact: true }).fill('QAR');
+  await expect(dialog.locator('input[name="currency"]')).toHaveValue('QAR');
   await dialog.getByLabel('Opening balance date', { exact: true }).fill('2026-10-01');
   await dialog.getByLabel('Owner-confirmed opening amount', { exact: true }).fill('0');
   await dialog.getByRole('button', { name: 'Save record', exact: true }).click(); await expect(dialog).toBeVisible();
@@ -67,12 +73,13 @@ test('Independent full workspace: enabled car route reads real records, partial 
     await dialog.getByLabel('Collected amount', { exact: true }).fill(amount); await dialog.getByLabel('Payment method', { exact: true }).selectOption(method);
     await save(page);
   }
+  await page.getByText('Expenses & maintenance', { exact: true }).click();
   await page.getByRole('button', { name: 'Record maintenance cost', exact: true }).click();
   await page.getByRole('dialog').getByLabel('Cost date', { exact: true }).fill('2026-10-11');
   await page.getByRole('dialog').getByLabel('Actual recorded cost', { exact: true }).fill('12.5');
-  await page.getByRole('dialog').getByLabel('Currency', { exact: true }).fill('QAR');
+  await expect(page.getByRole('dialog').locator('input[name="currency"]')).toHaveValue('QAR');
   await page.getByRole('dialog').getByLabel('Cost / work description', { exact: true }).fill('Synthetic one independent maintenance cost');
-  await save(page); await page.reload();
+  await save(page); await page.reload(); await openCar(page);
   await expect(page.getByRole('region', { name: 'Car rental balances', exact: true })).toContainText('QAR 50');
   const cars = await state(page, 'car-rentals'); expect(cars.collections).toHaveLength(3); expect(cars.expenses).toHaveLength(1);
   expect(cars.balances[0]).toMatchObject({ agreedAmount: '100', collectedAmount: '50', outstandingAmount: '50', pendingChequeAmount: '10' });

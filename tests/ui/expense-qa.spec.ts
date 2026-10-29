@@ -28,7 +28,7 @@ async function payment(dialog: Locator, method: string, amount: string, date: st
 }
 async function expenseForm(page: Page, amount = '1000.25', paid = false) {
   const d = await open(page, 'Add property expense'); await d.getByLabel('Expense category', { exact: true }).selectOption({ label: 'Landlord rent / payment' });
-  await d.getByLabel('Expense date', { exact: true }).fill('2026-10-05'); await d.getByLabel('Recorded cost', { exact: true }).fill(amount); await d.getByLabel('Currency', { exact: true }).fill('QAR');
+  await d.getByLabel('Expense date', { exact: true }).fill('2026-10-05'); await d.getByLabel('Recorded cost', { exact: true }).fill(amount); await expect(d.locator('input[name="currency"]')).toHaveValue('QAR');
   await d.getByLabel('Vendor / landlord', { exact: true }).fill('Synthetic browser landlord'); await d.getByLabel('Vendor contact (optional)', { exact: true }).fill('synthetic-landlord@example.invalid');
   await d.getByLabel('Invoice / expense reference (optional)', { exact: true }).fill('SYNTHETIC-LANDLORD-INVOICE'); await d.getByLabel('Notes (optional)', { exact: true }).fill('Synthetic <img src=x onerror=alert(1)>');
   if (paid) await payment(d, 'Cash', '400.00', '2026-10-05', 'SYNTHETIC-CASH'); return d;
@@ -51,7 +51,7 @@ test('Expense UI QA: owner costs/partial payments/maintenance/warranty/history/r
   await expect(landlord.getByRole('button', { name: 'Record payment', exact: true })).toHaveCount(0);
   await createJob(page, 'Synthetic first leaking AC'); await jobRow(page, 'Synthetic first leaking AC').getByRole('button', { name: 'Complete job', exact: true }).click(); d = page.locator('#expense-dialog');
   await d.getByLabel('Completed date', { exact: true }).fill('2026-10-08'); await d.getByLabel('Work completed', { exact: true }).fill('Synthetic replacement of faulty part');
-  await d.getByLabel('Actual cost', { exact: true }).fill('250.50'); await d.getByLabel('Currency', { exact: true }).fill('QAR'); await d.getByLabel('Invoice / expense reference (optional)', { exact: true }).fill('SYNTHETIC-AC-INVOICE');
+  await d.getByLabel('Actual cost', { exact: true }).fill('250.50'); await expect(d.locator('input[name="currency"]')).toHaveValue('QAR'); await d.getByLabel('Invoice / expense reference (optional)', { exact: true }).fill('SYNTHETIC-AC-INVOICE');
   await d.getByLabel('Warranty start date (optional)', { exact: true }).fill('2026-10-08'); await d.getByLabel('Warranty end date (optional)', { exact: true }).fill('2026-10-31');
   await payment(d, 'Cash', '100.25', '2026-10-08', 'SYNTHETIC-JOB-CASH'); await save(d);
   await expect(jobRow(page, 'Synthetic first leaking AC').getByRole('button', { name: 'Complete job', exact: true })).toHaveCount(0); await expect(expenses.getByRole('row')).toHaveCount(3);

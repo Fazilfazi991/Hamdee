@@ -69,7 +69,7 @@ test('Staff independent owner UI: property receipt, partial/full handovers, dupl
   dialog = await open(page, 'Add company account');
   await dialog.getByLabel('Account name', { exact: true }).fill('Synthetic independent company cash');
   await dialog.getByLabel('Account type', { exact: true }).selectOption('cash');
-  await dialog.getByLabel('Currency', { exact: true }).fill('QAR');
+  await expect(dialog.locator('input[name="currency"]')).toHaveValue('QAR');
   await dialog.getByLabel('Opening balance date', { exact: true }).fill('2026-10-01');
   await dialog.getByLabel('Owner-confirmed opening balance', { exact: true }).fill('0');
   await dialog.getByLabel('I confirm this account’s opening amount and date, including an explicit zero if appropriate.', { exact: true }).check(); await save(dialog);
@@ -86,7 +86,7 @@ test('Staff independent owner UI: property receipt, partial/full handovers, dupl
     const form = await open(page, 'Record handover');
     await form.getByLabel('Collector', { exact: true }).selectOption(collectorId);
     await form.getByLabel('Company cash / bank account', { exact: true }).selectOption(accountId);
-    await expect(form.getByLabel('Account currency', { exact: true })).toHaveValue('QAR');
+    await expect(form.locator('input[name="currency"]')).toHaveValue('QAR');
     await form.getByLabel('Handover amount', { exact: true }).fill(amount);
     await form.getByLabel('Handover date', { exact: true }).fill('2026-10-16');
     await form.getByLabel('New unique handover reference', { exact: true }).fill(reference); return form;

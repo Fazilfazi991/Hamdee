@@ -130,7 +130,7 @@ test('handover errors retain the draft and uncertain retries reuse the exact com
   });
   await login(page);await navigate(page,'Staff Collections');await page.getByRole('button',{name:'Record handover',exact:true}).click();
   await page.getByLabel('Collector',{exact:true}).last().selectOption(collectorId);await page.getByLabel('Company cash / bank account',{exact:true}).selectOption(accountId);
-  await expect(page.getByLabel('Account currency',{exact:true})).toHaveValue('AED');
+  await expect(page.locator('dialog[open] input[name="currency"]')).toHaveValue('AED');
   await page.getByLabel('Handover amount',{exact:true}).fill('25.123456789123');await page.getByLabel('Handover date',{exact:true}).fill(fixture.day);
   await page.getByLabel('New unique handover reference',{exact:true}).fill('SYNTHETIC-PARTIAL');
   await page.getByRole('button',{name:'Save record',exact:true}).click();await expect(page.getByRole('alert')).toContainText('saved available balance');
@@ -178,10 +178,10 @@ test('company account setup has no default opening balance and requires owner co
   const fixture=await staffContract(page);await login(page);await navigate(page,'Staff Collections');await page.getByRole('button',{name:'Add company account',exact:true}).click();
   await expect(page.getByLabel('Owner-confirmed opening balance',{exact:true})).toHaveValue('');await expect(page.getByLabel('Opening balance date',{exact:true})).toHaveValue('');
   await page.getByLabel('Account name',{exact:true}).fill('Synthetic confirmed bank');await page.getByLabel('Account type',{exact:true}).selectOption('bank');
-  await page.getByLabel('Currency',{exact:true}).fill('AED');await page.getByLabel('Opening balance date',{exact:true}).fill(fixture.day);await page.getByLabel('Owner-confirmed opening balance',{exact:true}).fill('0');
+  await expect(page.locator('dialog[open] input[name="currency"]')).toHaveValue('QAR');await page.getByLabel('Opening balance date',{exact:true}).fill(fixture.day);await page.getByLabel('Owner-confirmed opening balance',{exact:true}).fill('0');
   await page.getByLabel('I confirm this account’s opening amount and date, including an explicit zero if appropriate.',{exact:true}).check();
   await page.getByRole('button',{name:'Save record',exact:true}).click();await expect(page.getByRole('dialog')).not.toBeVisible();
-  expect(fixture.commands[0].body).toEqual({action:'create-account',scope:'company',name:'Synthetic confirmed bank',kind:'bank',currency:'AED',openingDate:fixture.day,openingAmount:'0',ownerConfirmedOpening:true,notes:''});
+  expect(fixture.commands[0].body).toEqual({action:'create-account',scope:'company',name:'Synthetic confirmed bank',kind:'bank',currency:'QAR',openingDate:fixture.day,openingAmount:'0',ownerConfirmedOpening:true,notes:''});
 });
 
 test('expired write proof retains a staff draft and requires explicit verification and save',async({page})=>{

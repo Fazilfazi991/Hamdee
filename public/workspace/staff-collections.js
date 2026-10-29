@@ -27,7 +27,7 @@ export function staffCommandForm(action,record={},choices={collectors:[],receipt
   const collector=()=>select('collectorId','Collector',collectors,record.collectorId);
   const account=(required=true)=>select('accountId','Company cash / bank account',accounts,record.accountId,required);
   const amount=()=>field('amount','Handover amount',record.amount||'','text',true,'inputmode="decimal" pattern="[0-9]{1,18}(\\.[0-9]{1,12})?"');
-  const currency=()=>field('currency','Account currency',record.currency||'','text',true,'readonly maxlength="3" pattern="[A-Z]{3}"');
+  const currency=()=>`<input type="hidden" name="currency" value="${esc(record.currency||'')}">`;
   let title,body,hidden={};
   if(action==='create-collector'||action==='update-collector'){
     title=action==='create-collector'?'Add collector':'Edit collector';
@@ -35,7 +35,7 @@ export function staffCommandForm(action,record={},choices={collectors:[],receipt
     body=field('name','Collector name',record.name||'','text',true,'maxlength="200"')+field('phone','Phone / contact (optional)',record.phone||'','tel',false,'maxlength="60"')+notes(record.notes||'')+'<p class="muted-help">A collector is a business record managed by the owner. This does not create a CRM account.</p>';
   }else if(action==='create-account'){
     title='Add company cash / bank account';hidden={scope:'company'};
-    body=field('name','Account name','','text',true,'maxlength="200"')+select('kind','Account type',[['cash','Company cash'],['bank','Company bank']])+field('currency','Currency','','text',true,'maxlength="3" pattern="[A-Z]{3}"')+
+    body=field('name','Account name','','text',true,'maxlength="200"')+select('kind','Account type',[['cash','Company cash'],['bank','Company bank']])+'<input type="hidden" name="currency" value="QAR">'+
       field('openingDate','Opening balance date','','date')+field('openingAmount','Owner-confirmed opening balance','','text',true,'inputmode="decimal" pattern="[0-9]{1,18}(\\.[0-9]{1,12})?"')+
       confirmation('ownerConfirmedOpening','I confirm this account’s opening amount and date, including an explicit zero if appropriate.')+notes('')+'<p class="muted-help">Enter the actual opening balance. No suggested balance or receipt income is created.</p>';
   }else if(action==='record-collection'){
@@ -195,7 +195,7 @@ function draw(c){
     (c.accountIssue?`<p class="operations-notice" role="status">Company accounts unavailable: ${esc(c.accountIssue)} Handovers cannot be submitted until accounts load.</p>`:'')+
     panel('Monthly statement',`Saved custody movements for ${esc(d.month)} through ${esc(d.asOf)}.`,table(['Collector','Currency','Collected into custody','Handed over'],d.totals.map(row=>[esc(collector(row.collectorId)),esc(row.currency),money(row.monthReceived,row.currency),money(row.monthHandedOver,row.currency)]),'Monthly collector statement'))+
     panel('Daily statement','Recorded end-of-day custody balances for the selected month, including saved corrections.',table(['Date','Collector','Currency','Collected into custody','Handed over','End-of-day held'],d.daily.filter(row=>row.date.slice(0,7)===d.month).map(row=>[esc(row.date),esc(collector(row.collectorId)),esc(row.currency),money(row.received,row.currency),money(row.handedOver,row.currency),money(row.balance,row.currency)]),'Daily collector statement'))+
-    panel('Correction and change history','Original records remain visible. Attributed changes and reasons come from the service.',table(['Action','Time','Actor','Record / original','Reason'],d.history.map(row=>[esc(row.action),esc(row.occurredAt),esc(row.actorId),esc(row.detail?.data?.originalId||row.detail?.data?.id||'—'),esc(row.detail?.data?.reason||'—')]),'Staff collection history'))+
+    panel('Correction and change history','Previous changes and reasons remain available.',table(['Action','Time','Reason'],d.history.map(row=>[esc(row.action),esc(row.occurredAt),esc(row.detail?.data?.reason||'—')]),'Staff collection history'))+
     `<p class="muted-help">${esc(d.basis)}</p>`;
   c.target.querySelector('#staff-filters').addEventListener('submit',event=>{event.preventDefault();if(!active(c))return;period={...Object.fromEntries(new FormData(event.target))};void renderStaffCollections(c.target,c);});
   c.target.querySelectorAll('[data-staff-action]').forEach(control=>control.addEventListener('click',()=>{
