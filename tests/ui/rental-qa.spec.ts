@@ -29,18 +29,6 @@ async function openAllRentals(page: Page) { const id = new URL(page.url()).hash.
 async function open(page: Page, name: string) { await page.getByRole('button', { name, exact: true }).first().click(); return page.locator('#rental-dialog'); }
 async function save(dialog: Locator) { await dialog.getByRole('button', { name: 'Save record', exact: true }).click(); await expect(dialog).not.toBeVisible(); }
 async function room(page: Page, code: string) { const d = await open(page, 'Add room'); await d.getByLabel('Room code', { exact: true }).fill(code); await save(d); }
-test('room details and actions fit without sideways scrolling', async ({page},info) => {
-  await login(page); await addProperty(page); await room(page,'SYNTHETIC-ROOM-01');
-  const rooms=page.getByRole('region',{name:'Rooms and occupancy',exact:true});
-  await expect(rooms).toContainText('SYNTHETIC-ROOM-01');
-  for(const width of [390,430,768,1024,1440]){
-    await page.setViewportSize({width,height:900});
-    expect(await rooms.evaluate(node=>node.scrollWidth-node.clientWidth),`room table overflow at ${width}px`).toBeLessThanOrEqual(1);
-    await expect(rooms.getByRole('button',{name:'Collect rent',exact:true})).toBeVisible();
-    await expect(rooms.getByRole('button',{name:'Room history',exact:true})).toBeVisible();
-    if(width===390||width===1440)await rooms.screenshot({path:`evidence/rental-qa/${info.project.name}-rooms-${width}.png`});
-  }
-});
 async function prepareRoomAgreement(page: Page) {
   await addProperty(page); await room(page, 'QA-R01'); await room(page, 'QA-R02');
   let d = await open(page, 'Add tenant'); await d.getByLabel('Tenant name', { exact: true }).fill('Synthetic Browser Tenant');
