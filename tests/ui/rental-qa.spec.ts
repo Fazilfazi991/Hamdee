@@ -29,6 +29,33 @@ async function openAllRentals(page: Page) { const id = new URL(page.url()).hash.
 async function open(page: Page, name: string) { await page.getByRole('button', { name, exact: true }).first().click(); return page.locator('#rental-dialog'); }
 async function save(dialog: Locator) { await dialog.getByRole('button', { name: 'Save record', exact: true }).click(); await expect(dialog).not.toBeVisible(); }
 async function room(page: Page, code: string) { const d = await open(page, 'Add room'); await d.getByLabel('Room code', { exact: true }).fill(code); await save(d); }
+test('October roster stays historical until reviewed room confirmations are saved', async ({page},info) => {
+  await login(page); await addProperty(page); await room(page,'QA-R01'); await room(page,'QA-R02'); await room(page,'QA-R03');
+  for(const [name,code] of [['Synthetic Roster One','QA-R01'],['Synthetic Roster Two','QA-R02'],['Synthetic Ambiguous One','QA-R03'],['Synthetic Ambiguous Two','QA-R03']]){
+    const d=await open(page,'Add tenant');await d.getByLabel('Tenant name',{exact:true}).fill(name);await d.getByLabel('Phone (optional)',{exact:true}).fill('00000000');
+    await d.getByLabel('Notes (optional)',{exact:true}).fill(`October2026 source snapshot only. Occupancy and agreement terms unverified. SYNTHETIC RENTAL BROWSER VILLA / ${code} (SL 17, PDF p1; AMOUNT=100; R DATE=5)`);await save(d);
+  }
+  await page.getByRole('link',{name:'Rooms',exact:true}).click();
+  const list=page.getByRole('region',{name:'Rooms and occupancy',exact:true}),first=list.getByRole('row').filter({hasText:'QA-R01'});
+  await expect(first).toContainText('Synthetic Roster One');await expect(first).toContainText('00000000');await expect(first).toContainText('Needs Review');await expect(first).toContainText('Owner-confirmed October roster');
+  for(const width of [390,430,768,1024,1440]){await page.setViewportSize({width,height:900});expect(await list.evaluate(node=>node.scrollWidth-node.clientWidth),`room table overflow at ${width}px`).toBeLessThanOrEqual(1);}
+  await page.setViewportSize(info.project.name==='mobile'?{width:390,height:844}:{width:1440,height:1000});
+  await list.screenshot({path:`evidence/rental-qa/${info.project.name}-october-roster.png`});
+  const ambiguous=list.getByRole('row').filter({hasText:'QA-R03'});await expect(ambiguous).toContainText('Source mapping needs review');
+  await page.getByRole('button',{name:'Review multiple rooms',exact:true}).click();const dialog=page.locator('#rental-dialog');
+  await expect(dialog).toContainText('QA-R01');await expect(dialog).toContainText('QA-R02');await expect(dialog).not.toContainText('QA-R03');
+  await dialog.getByLabel(/QA-R01/).check();await dialog.getByLabel(/QA-R02/).check();
+  const keys:string[]=[];let interrupted=false;
+  await page.route('**/api/hamdee/v1/rental',async route=>{if(route.request().method()!=='POST')return route.continue();keys.push(route.request().headers()['idempotency-key']);if(!interrupted){interrupted=true;await route.fetch();return route.abort('failed');}return route.continue();});
+  await dialog.getByRole('button',{name:'Confirm selected rooms'}).click();await expect(dialog.getByRole('alert')).toContainText('may have completed');await dialog.getByRole('button',{name:'Confirm selected rooms'}).click();await expect(dialog).not.toBeVisible();
+  expect(keys).toHaveLength(3);expect(keys[0]).toBe(keys[1]);expect(keys[2]).not.toBe(keys[1]);
+  await expect(first).toContainText('Occupied');await expect(list.getByRole('row').filter({hasText:'QA-R02'})).toContainText('Occupied');await expect(ambiguous).toContainText('Needs Review');
+  await ambiguous.getByRole('button',{name:'Mark Vacant'}).click();await save(page.locator('#rental-dialog'));await expect(ambiguous).toContainText('Vacant');
+  const saved=await page.request.get(server.url+'/api/hamdee/v1/rental?month=2026-11&asOf='+new Date().toISOString().slice(0,10));const savedData=(await saved.json()).data;
+  expect(savedData.agreements).toHaveLength(0);expect(savedData.dues).toHaveLength(0);expect(savedData.collections).toHaveLength(0);
+  await page.getByRole('link',{name:'Tenants',exact:true}).click();await expect(page.locator('.rental-occupancy-metrics')).toHaveCount(0);await expect(page.getByRole('region',{name:'Tenant register'})).toContainText('Owner-confirmed October roster');
+  await page.reload();await page.getByRole('link',{name:'Rooms',exact:true}).click();await expect(page.getByRole('region',{name:'Rooms and occupancy'}).getByRole('row').filter({hasText:'QA-R01'})).toContainText('Occupied');
+});
 async function prepareRoomAgreement(page: Page) {
   await addProperty(page); await room(page, 'QA-R01'); await room(page, 'QA-R02');
   let d = await open(page, 'Add tenant'); await d.getByLabel('Tenant name', { exact: true }).fill('Synthetic Browser Tenant');

@@ -1,13 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { historicalOccupantsByRoom, sourceRoomReferences } from '../src/historical-occupancy';
+import { historicalOccupantsByRoom, isOwnerConfirmedOctoberContact, sourceRoomReferences } from '../src/historical-occupancy';
 import { createOwnerQaFixture } from './support/owner-crm-harness';
 
 const note = (property = 'DEMO Villa', code = 'A1') =>
   `October2026 source snapshot only. Occupancy and agreement terms unverified. ${property} / ${code} (SL 1, PDF p1; AMOUNT=900; R DATE=5)`;
 const properties = [{ id: 'p1', name: 'DEMO Villa' }, { id: 'p2', name: 'DEMO Other' }];
 const rooms = [{ id: 'r1', property_id: 'p1', code: 'A1' }, { id: 'r2', property_id: 'p2', code: 'A1' }];
+
+test('roster label follows identifiable source contacts without asserting a room match', () => {
+  assert.equal(isOwnerConfirmedOctoberContact({name:'Synthetic contact',notes:note('Unmatched villa','A9')}),true);
+  for (const name of ['','VACANT','N/A']) assert.equal(isOwnerConfirmedOctoberContact({name,notes:note()}),false);
+  assert.equal(isOwnerConfirmedOctoberContact({name:'Synthetic contact',notes:'Unverified notes'}),false);
+});
 
 test('historical provenance links only the unique property and room, never a global room code', () => {
   const projected = historicalOccupantsByRoom(properties, rooms, [{ id: 't1', notes: note() }]);

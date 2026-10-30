@@ -3,7 +3,7 @@ import type { Identity } from './auth';
 import { PropertyService } from './service';
 import { requireThat } from './errors';
 import { uuid } from './validation';
-import { historicalOccupantsByRoom } from './historical-occupancy';
+import { historicalOccupantsByRoom,isOwnerConfirmedOctoberContact } from './historical-occupancy';
 
 type Row=Record<string,unknown>;
 export const day=(v:unknown)=>v instanceof Date?v.toISOString().slice(0,10):String(v).slice(0,10);
@@ -35,6 +35,7 @@ export class RentalService {
       const originalRooms=original.filter(row=>roomIds.has(String(row.id))&&typeof row.code==='string').map(row=>({...row,property_id:row.propertyId}));
       const originalTenants=original.filter(row=>tenantIds.has(String(row.id))&&typeof row.notes==='string');
       const historical=historicalOccupantsByRoom(properties,originalRooms,originalTenants);
+      const octoberRosterIds=new Set(originalTenants.filter(isOwnerConfirmedOctoberContact).map(row=>String(row.id)));
       const collections=await select('rent_collections'),history=await select('rental_events');
       const dues=(await sql.query<Row>(`SELECT d.*,coalesce(sum(a.amount_minor),0)::text AS paid_minor,
         (d.amount_minor-coalesce(sum(a.amount_minor),0))::text AS outstanding_minor FROM hamdee_private.rent_dues d
@@ -65,7 +66,7 @@ export class RentalService {
           occupancyHistory:history.map(c=>({...view(c),internalAgreementId:c.agreement_id})),
           historicalOccupants:historical.get(String(room.id))?.historicalOccupants??[],historicalOccupancyReviewRequired:historical.get(String(room.id))?.historicalOccupancyReviewRequired??false};
       });
-      return {rooms:roomViews,tenants:tenants.map(view),agreements:agreements.map(view),dues:dues.map(d=>({...view(d),status:BigInt(String(d.outstanding_minor))===0n?'paid':BigInt(String(d.paid_minor))>0n?'partial':'pending'})),collections:collections.map(c=>({...view(c),...(c.kind==='advance'&&c.status==='recorded'&&day(c.received_date)<=asOf?{availableAdvanceMinor:String(availableAdvance(c))}:{})})),allocations:allocations.map(view),history:history.map(view),occupancyAvailable,sourceConfirmations:sourceConfirmations.map(view),
+      return {rooms:roomViews,tenants:tenants.map(t=>({...view(t),ownerConfirmedOctoberRoster:octoberRosterIds.has(String(t.id))})),agreements:agreements.map(view),dues:dues.map(d=>({...view(d),status:BigInt(String(d.outstanding_minor))===0n?'paid':BigInt(String(d.paid_minor))>0n?'partial':'pending'})),collections:collections.map(c=>({...view(c),...(c.kind==='advance'&&c.status==='recorded'&&day(c.received_date)<=asOf?{availableAdvanceMinor:String(availableAdvance(c))}:{})})),allocations:allocations.map(view),history:history.map(view),occupancyAvailable,sourceConfirmations:sourceConfirmations.map(view),
         summary:{totalRooms:rooms.length,occupiedRooms:roomViews.filter(r=>r.occupancy==='occupied').length,vacantRooms:roomViews.filter(r=>r.occupancy==='vacant').length,unverifiedRooms:roomViews.filter(r=>r.occupancy==='unknown').length,currencies:[...summaries].map(([currency,values])=>({currency,...Object.fromEntries(Object.entries(values).map(([k,v])=>[k,String(v)]))}))}};
     });
   }

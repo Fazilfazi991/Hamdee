@@ -36,11 +36,11 @@ async function render(data: ReturnType<typeof fixture>, section = 'rooms') {
 test('An imported room without a dated agreement is unverified, including legacy vacant responses', async () => {
   const data = fixture(), before = JSON.stringify(data);
   const html = await render(data);
-  assert.match(html, /<span class="badge amber">Occupancy not verified<\/span>/);
+  assert.match(html, /<span class="badge amber">Needs Review<\/span>/);
   assert.match(html, /<span>Vacant rooms<\/span>[\s\S]*?<div class="metric-value">0<\/div>/);
-  assert.match(html, /<span>Occupancy not verified<\/span>[\s\S]*?<div class="metric-value">1<\/div>/);
+  assert.match(html, /<span>Needs Review<\/span>[\s\S]*?<div class="metric-value">1<\/div>/);
   assert.doesNotMatch(html, /<span class="badge [^"]*">Vacant<\/span>/);
-  assert.match(html, /Historical snapshot · October 2026/);
+  assert.match(html, /Owner-confirmed October roster · current occupancy needs review/);
   assert.match(html, /DEMO historical &lt;img src=x&gt;/);
   assert.equal(JSON.stringify(data), before, 'Rendering cannot create agreements, dues or modify imported records');
 });
@@ -56,7 +56,7 @@ test('Owner-confirmed occupancy and vacancy do not require an agreement document
   const html = await render(data);
   assert.match(html, /<span class="badge green">Occupied<\/span>/);
   assert.match(html, /DEMO historical &lt;img src=x&gt;/);
-  assert.match(html, /Change tenant/);
+  assert.match(html, /Change Tenant/);
   assert.match(html, /Collect rent/);
   room.occupancy = 'vacant';
   assert.equal(ui.occupancyStatus(data, room), 'vacant');
@@ -84,7 +84,7 @@ test('An owner-confirmed October source is labelled without asserting current oc
   const data = {...fixture(),sourceConfirmations:[{tenantId:'demo-tenant-1',period:'2026-10'}]};
   const html = await render(data, 'tenants');
   const tenantTable = html.split('aria-label="Tenant register"')[1].split('</table>')[0];
-  assert.match(tenantTable, /October 2026 · owner confirmed/);
+  assert.match(tenantTable, /Owner-confirmed October roster/);
   assert.equal(ui.occupancyStatus(data, data.rooms[0]), 'unknown');
 });
 
@@ -123,6 +123,6 @@ test('A conflicting historical source is held visibly rather than choosing an oc
   data.rooms[0].historicalOccupants = [];
   Object.assign(data.rooms[0], { historicalOccupancyReviewRequired: true });
   const html = await render(data);
-  assert.match(html, /Historical source needs review/);
-  assert.match(html, /Occupancy not verified/);
+  assert.match(html, /Source mapping needs review/);
+  assert.match(html, /Needs Review/);
 });

@@ -26,6 +26,12 @@ export function sourceRoomReferences(notes: unknown) {
   return matches.map(match => ({ property: normalized(match[1]), code: normalized(match[2]),
     sourceReference: `SL ${match[3]}, PDF p${match[4]}` }));
 }
+// The owner confirmed the October source roster. This is a source label only:
+// it neither resolves ambiguous room links nor confirms present occupancy.
+export function isOwnerConfirmedOctoberContact(tenant: RecordRow) {
+  const name=normalized(tenant.name);
+  return Boolean(name)&&!unnamed.test(name)&&sourceRoomReferences(tenant.notes).length>0;
+}
 export function historicalOccupantsByRoom(properties: readonly RecordRow[], rooms: readonly RecordRow[], tenants: readonly RecordRow[]) {
   const propertyIds = new Map<string, string[]>();
   for (const property of properties) {
