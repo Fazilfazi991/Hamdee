@@ -20,7 +20,7 @@ async function contract(page:Page,write?:(route:Route,body:Record<string,unknown
  const day=new Date().toISOString().slice(0,10),month=day.slice(0,7),commands:{path:string;body:Record<string,unknown>;key:string}[]=[];
  const vehicles=[{id:ids.vehicle,registration:'SYNTHETIC-101',make:'Synthetic',model:'Vehicle',status:'active',notes:'',version:1}];
  const agreements=[{id:ids.agreement,vehicleId:ids.vehicle,agreementKey:ids.agreement,customerName:'Synthetic car customer',customerContact:'Synthetic contact',startDate:'2026-10-01',endDate:'2026-10-31',agreedAmount:'300.123456789123',currency:'AED',billingPeriod:'Explicit term total',reference:'SYNTHETIC-TERM',notes:'',previousAgreementId:null,vehicleSnapshot:vehicles[0]}];
- const cars={vehicles,agreements,availability:[{vehicleId:ids.vehicle,startDate:day,endDate:day,available:false,reason:'rented',agreementIds:[ids.agreement]}],balances:[{agreementId:ids.agreement,vehicleId:ids.vehicle,currency:'AED',agreedAmount:'300.123456789123',collectedAmount:'100.123456789123',outstandingAmount:'200',pendingChequeAmount:'50'}],collections:[],expenses:[],history:[],summary:[{vehicleId:ids.vehicle,currency:'AED',cashCollected:'100.123456789123',recordedCosts:'10',recordedComparison:'90.123456789123',pendingCheques:'50'}],month,asOf:day,moneyUnit:'decimal-major-unit-strings',basis:'Synthetic server snapshot; no client calculation.'};
+ const cars={vehicles,agreements,availability:[{vehicleId:ids.vehicle,startDate:day,endDate:day,available:false,reason:'rented',agreementIds:[ids.agreement]}],balances:[{agreementId:ids.agreement,vehicleId:ids.vehicle,currency:'AED',agreedAmount:'300.123456789123',collectedAmount:'100.123456789123',outstandingAmount:'200',pendingChequeAmount:'50'}],collections:[],expenses:[],history:[{action:'cars:create-vehicle',occurredAt:'2026-10-29T15:34:37Z',actorId:'synthetic-actor-id',detail:{data:{id:'synthetic-record-id',reference:'Synthetic reference'}}}],summary:[{vehicleId:ids.vehicle,currency:'AED',cashCollected:'100.123456789123',recordedCosts:'10',recordedComparison:'90.123456789123',pendingCheques:'50'}],month,asOf:day,moneyUnit:'decimal-major-unit-strings',basis:'Synthetic server snapshot; no client calculation.'};
  const accounts=[{id:ids.company,name:'Synthetic company bank',scope:'company',kind:'bank',currency:'AED',openingDate:day,openingAmount:'0'},{id:ids.personal,name:'Synthetic personal cash',scope:'personal',kind:'cash',currency:'AED',openingDate:day,openingAmount:'0'}];
  const source={kind:'car-rental',id:ids.receipt,date:day,amount:'25.123456789123',currency:'AED',method:'bank',classification:'car-rental',status:'recorded',disposition:'unassigned',linked:false,companyAccountId:null};
  await page.route('**/api/hamdee/v1/staff-collections/receipts?*',route=>route.fulfill({json:{data:{data:[source,{...source,id:'pending-receipt',method:'cheque',status:'pending'}],hasMore:false,nextCursor:null,asOf:day,moneyUnit:'decimal-major-unit-strings'}}}));
@@ -30,6 +30,19 @@ async function contract(page:Page,write?:(route:Route,body:Record<string,unknown
  });
  return {commands,day,month,cars,accounts,source};
 }
+
+test('vehicle history stays readable and tables fit common screen widths',async({page},info)=>{
+ await contract(page);await login(page);await visit(page,'car-rentals','Vehicles & availability');
+ const history=page.getByRole('region',{name:'Vehicle record history',exact:true});
+ await expect(history).toContainText('Vehicle added');await expect(history).toContainText('Synthetic reference');
+ await expect(history).not.toContainText('synthetic-actor-id');await expect(history).not.toContainText('synthetic-record-id');
+ for(const width of [390,430,768,1024,1440]){
+  await page.setViewportSize({width,height:900});
+  const overflow=await page.locator('#operations-workspace .table-wrap').evaluateAll(nodes=>nodes.map(node=>({label:node.getAttribute('aria-label'),overflow:node.scrollWidth-node.clientWidth})).filter(row=>row.overflow>1));
+  expect(overflow,`table overflow at ${width}px`).toEqual([]);
+  if(width===390||width===1440)await history.screenshot({path:`evidence/car-finance-ui/${info.project.name}-history-${width}.png`});
+ }
+});
 
 test('car view displays authoritative totals and records explicit term fields without multiplying dates',async({page},info)=>{
  const fixture=await contract(page);await login(page);await visit(page,'car-rentals','Vehicles & availability');await expect(page.getByRole('region',{name:'Car rental balances',exact:true})).toContainText('AED 300.123456789123');await expect(page.getByRole('region',{name:'Car rental balances',exact:true})).toContainText('AED 200');await expect(page.getByRole('region',{name:'Vehicle register',exact:true})).toContainText('rented');

@@ -125,3 +125,25 @@ main.business-overview-page{padding:24px 28px 12px}
 /* Room records remain readable without sideways scrolling on a phone. */
 .rental-mobile-label{display:none}
 @media(max-width:640px){.rental-room-table{display:block;width:100%;min-width:0}.rental-room-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.rental-room-table tbody{display:block}.rental-room-table tr{display:block;padding:12px 16px;border-bottom:1px solid var(--rule)}.rental-room-table td{display:grid;grid-template-columns:minmax(100px,35%) minmax(0,1fr);gap:8px;padding:6px 0;border:0;overflow-wrap:anywhere}.rental-room-table .rental-mobile-label{display:block;font-size:11px;color:var(--muted)}.rental-room-table td:last-child{display:block;padding-top:10px}.rental-room-table td:last-child .rental-mobile-label{margin-bottom:4px}.rental-room-table td .button{margin:3px 6px 3px 0}.rental-room-table td[colspan]{display:block}}
+
+/* Keep ledger columns and room actions within the available workspace. */
+.data-table{table-layout:fixed;min-width:0;white-space:normal}
+.data-table th,.data-table td{overflow-wrap:anywhere;vertical-align:top}
+.data-table td .button{white-space:normal;text-align:center}
+.responsive-cell-label{display:none}
+@media(max-width:900px){
+ .responsive-table,.responsive-table tbody,.responsive-table tr{display:block;width:100%}
+ .responsive-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+ .responsive-table tr{padding:12px 16px;border-bottom:1px solid var(--rule)}
+ .responsive-table td,.rental-room-table td{display:block;padding:6px 0;border:0}
+ .responsive-table td[colspan]{display:block}
+ .responsive-cell-label{display:block;margin-bottom:3px;font-size:11px;color:var(--muted)}
+ .responsive-table td .button{margin:3px 6px 3px 0}
+}
+@media(min-width:901px) and (max-width:1400px){
+ .rental-room-table,.rental-room-table tbody,.rental-room-table tr{display:block;width:100%}
+ .rental-room-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+ .rental-room-table tr{padding:12px 16px;border-bottom:1px solid var(--rule)}
+ .rental-room-table td{display:block;padding:6px 0;border:0}
+ .rental-room-table .responsive-cell-label{display:block;margin-bottom:3px;font-size:11px;color:var(--muted)}
+}
