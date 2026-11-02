@@ -4,6 +4,7 @@ import { PropertyService } from './service';
 import { requireThat } from './errors';
 import { uuid } from './validation';
 import { historicalOccupantsByRoom,isOwnerConfirmedOctoberContact } from './historical-occupancy';
+import { activePlacement,assertFunds,cashAccount,insertOperation,localReceiptReader,moneyEntry,sourceClaim,sourcePlacementDate,verifiedReceipt } from './company-finance';
 
 type Row=Record<string,unknown>;
 export const day=(v:unknown)=>v instanceof Date?v.toISOString().slice(0,10):String(v).slice(0,10);
@@ -80,11 +81,12 @@ export class RentalService {
       'confirm-occupancy':['roomId','tenantId','status','effectiveDate','expectedOccupancyVersion','notes','terms'],
       'confirm-source-reference':['roomId','tenantId','sourceSha256','sourceReference','period','notes'],
       'end-agreement':['agreementId','roomId','tenantId','period','expectedVersion','endDate'],'issue-due':['agreementId','roomId','tenantId','period','dueDate','amount'],
-      'record-collection':['agreementId','roomId','tenantId','period','kind','method','amount','receivedDate','reference','allocations'],
+      'record-collection':['agreementId','roomId','tenantId','period','kind','method','amount','receivedDate','reference','allocations','receivingAccountId','accountConfirmed'],
       'allocate-advance':['collectionId','dueId','amount','allocationDate'],'refund-deposit':['agreementId','roomId','tenantId','period','amount','receivedDate','method','reference']};
     const action=String(b.action);check(Object.hasOwn(fields,action)&&Object.keys(b).every(k=>k==='action'||fields[action].includes(k)),'Unknown operation or fields.');
     const digest=createHash('sha256').update(canonical(b)).digest('hex');
     return this.properties.ownerContext(identity,async(sql,actorId)=>{
+      if(action==='record-collection'&&b.receivingAccountId!==undefined)await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['hamdee-operations-money']);
       await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['rental-command:'+actorId+':'+key]);
       const saved=(await sql.query<{digest:string;result:Row}>('SELECT digest,result FROM hamdee_private.rental_commands WHERE actor_id=$1 AND key=$2',[actorId,key])).rows[0];
       if(saved){check(saved.digest===digest,'Use a new key for a changed submission.','IDEMPOTENCY_KEY_REUSED',409);return {...saved.result,replay:true};}
@@ -200,6 +202,17 @@ export class RentalService {
         }
         data=await insert('rent_collections',{id:entityId,agreement_id:parent!.id,room_id:roomId,property_id:propertyId,currency:parent!.currency,kind,method:b.method,amount_minor:n,received_date:received,reference:text(b.reference??'',200,false),status:pending?'pending':'recorded',event_id:eventId});
         for(const a of allocations)await allocate(data,a.dueId,a.amount,received);
+        if(b.receivingAccountId!==undefined){
+          check(action==='record-collection'&&b.method==='bank'&&b.accountConfirmed===true,'Confirm the receiving bank account for a bank receipt.','ACCOUNT_CONFIRMATION_REQUIRED',409);
+          const account=await cashAccount(sql,b.receivingAccountId,true);
+          check(account.kind==='bank'&&account.currency===parent!.currency,'Choose a company bank account in the rental currency.','ACCOUNT_MISMATCH',409);
+          check(received>=day(account.opening_date),'The receipt date cannot precede the bank account opening date.','ACCOUNT_DATE_MISMATCH',409);
+          const opsEventId=randomUUID(),source=await verifiedReceipt(sql,localReceiptReader,'property-rent',entityId),claim=await sourceClaim(sql,opsEventId,source);
+          check(!await activePlacement(sql,claim),'This receipt is already linked to a receiving account.','SOURCE_ALREADY_LINKED',409);
+          const placement=await moneyEntry(sql,opsEventId,{account_id:account.id,entry_kind:'receipt',delta:source.amount,currency:source.currency,business_date:await sourcePlacementDate(sql,claim,source.date),method:source.method,claim_id:claim,classification:source.classification});
+          await assertFunds(sql);await insertOperation(sql,'ops_events',{id:opsEventId,actor_id:actorId,action:'finance:receive',detail:JSON.stringify({data:{id:placement.id,sourceId:entityId},requestId})});
+          data={...data,receiving_account_id:account.id};
+        }else check(b.accountConfirmed===undefined,'Choose a receiving account before confirming it.');
       }else {
         check(parent!.kind==='advance','Choose an advance receipt.');data=await allocate(parent!,b.dueId,b.amount,b.allocationDate);entityId=String(data.id);
       }
