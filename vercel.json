@@ -3,6 +3,7 @@
   "regions": ["sin1"],
   "git": {
     "deploymentEnabled": {
+      "main": false,
       "codex/hamdee-crm-development": false,
       "codex/hamdee-production-hold": false
     }
