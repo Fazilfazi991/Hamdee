@@ -1,10 +1,18 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
+import {randomUUID} from 'node:crypto';
 import { startOwnerBrowserHarness } from '../support/owner-crm-harness';
 
 let server: Awaited<ReturnType<typeof startOwnerBrowserHarness>>;
 test.setTimeout(90_000);
-test.beforeEach(async () => { server = await startOwnerBrowserHarness({migrationFiles:['011_local_owner_occupancy.up.sql']}); await mkdir('evidence/rental-qa', { recursive: true }); });
+test.beforeEach(async () => {
+ server = await startOwnerBrowserHarness({migrationFiles:['006_local_operations_records.up.sql','011_local_owner_occupancy.up.sql','014_local_connected_funding.up.sql']});
+ await server.fixture.login();
+ for(const kind of ['cash','bank']){
+  const result=await server.fixture.request('POST','/api/hamdee/v1/company-finance/commands',{action:'create-account',name:'Synthetic rental '+kind,scope:'company',kind,currency:'QAR',openingDate:'2026-10-01',openingAmount:'0',ownerConfirmedOpening:true},{'Idempotency-Key':randomUUID()});expect(result.status).toBe(200);
+ }
+ await mkdir('evidence/rental-qa', { recursive: true });
+});
 test.afterEach(async () => { await server?.close(); });
 async function login(page: Page) {
   await page.goto(server.url + '/workspace/index.html#dashboard');
@@ -82,6 +90,7 @@ async function collect(page: Page, purpose: string, method: string, amount: stri
   const d=page.locator('#rental-dialog'); await d.getByLabel('Room / unit',{exact:true}).selectOption({label:'Synthetic Rental Browser Villa · QA-R01'}); await d.getByLabel('Tenant',{exact:true}).selectOption({label:'Synthetic Browser Tenant'}); await d.getByLabel('Rental month',{exact:true}).fill('2026-10');
   await d.getByLabel('Collection purpose', { exact: true }).selectOption({ label: purpose });
   await d.getByLabel('Payment method', { exact: true }).selectOption({ label: method });
+  if(method!=='Cheque (pending only)')await d.getByLabel('Receiving account or collector',{exact:true}).selectOption({label:'Synthetic rental '+method.toLowerCase()+' · QAR'});
   await d.getByLabel('Amount', { exact: true }).fill(amount); await d.getByLabel('Received date', { exact: true }).fill('2026-10-10');
   await d.getByLabel('Reference (optional)', { exact: true }).fill('SYNTHETIC-' + method.toUpperCase());
   await save(d);
@@ -92,7 +101,7 @@ test('Rental UI QA: full owner room/tenant/agreement/due/partial collection work
   await login(page); await prepareRoomAgreement(page);
   const occupancy = page.getByRole('region', { name: 'Rooms and occupancy', exact: true });
   await expect(occupancy.getByRole('cell', { name: 'Occupied', exact: true })).toHaveCount(1);
-  await expect(occupancy.getByRole('cell', { name: 'Occupancy not verified', exact: true })).toHaveCount(1);
+  await expect(occupancy.getByRole('cell', { name: 'Needs Review', exact: true })).toHaveCount(1);
   await collect(page, 'Rent', 'Cash', '400.00');
   const dues = page.getByRole('region', { name: 'Monthly rent dues', exact: true });
   await expect(dues.getByRole('cell', { name: 'partial', exact: true })).toBeVisible();
@@ -154,6 +163,7 @@ test('Rental UI QA: duplicate code and failed save retain input; logout clears p
 test('Rental CSRF recovery: expired proof preserves collection draft and requires Verify session then explicit Save', async ({ page }, info) => {
   await login(page);await prepareRoomAgreement(page);
   await page.getByRole('region',{name:'Monthly rent dues',exact:true}).getByRole('button',{name:'Collect rent',exact:true}).first().click();const d=page.locator('#rental-dialog');await d.getByLabel('Payment method',{exact:true}).selectOption('cash');await d.getByLabel('Amount',{exact:true}).fill('25.00');await d.getByLabel('Received date',{exact:true}).fill('2026-10-10');await d.getByLabel('Reference (optional)',{exact:true}).fill('SYNTHETIC-CSRF-RECOVERY');
+  await d.getByLabel('Receiving account or collector',{exact:true}).selectOption({label:'Synthetic rental cash · QAR'});
   const draft=await d.locator('form').evaluate(form=>Object.fromEntries(new FormData(form as HTMLFormElement)));
   const writes:{body:unknown;key:string;csrf:string}[]=[];
   page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/hamdee/v1/rental'){const headers=request.headers();writes.push({body:request.postDataJSON(),key:headers['idempotency-key'],csrf:headers['x-hamdee-csrf']});}});

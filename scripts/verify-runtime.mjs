@@ -24,12 +24,13 @@ try{
   const rentalAsset=await fetch(origin+'/workspace/rental.js');assert.equal(rentalAsset.status,200);
   const expenseAsset=await fetch(origin+'/workspace/expenses.js');assert.equal(expenseAsset.status,200);
   const partnerAsset=await fetch(origin+'/workspace/partners.js');assert.equal(partnerAsset.status,200);
-  for(const path of ['/api/hamdee/v1/properties','/api/hamdee/v1/rental','/api/hamdee/v1/expenses','/api/hamdee/v1/partners','/api/hamdee/v1/partners/commands','/api/hamdee/v1/operations-dashboard'])for(const method of ['GET','POST','PATCH','DELETE']){
+  const customerAsset=await fetch(origin+'/workspace/customers.js');assert.equal(customerAsset.status,200);
+  for(const path of ['/api/hamdee/v1/properties','/api/hamdee/v1/rental','/api/hamdee/v1/expenses','/api/hamdee/v1/partners','/api/hamdee/v1/partners/commands','/api/hamdee/v1/operations-dashboard','/api/hamdee/v1/customers','/api/hamdee/v1/customers/commands','/api/hamdee/v1/customers/documents/00000000-0000-4000-8000-000000000001','/api/hamdee/v1/reconciliations','/api/hamdee/v1/reconciliations/commands'])for(const method of ['GET','POST','PATCH','DELETE']){
     const response=await fetch(origin+path,{method,headers:{Authorization:'Bearer synthetic-test-bypass-must-fail',Origin:origin}});
     assert.equal(response.status,503);assert.equal((await response.json()).error.code,'CONFIGURATION_UNAVAILABLE');
     assert.equal(response.headers.get('cache-control'),'private, no-store');assert.equal(response.headers.get('x-content-type-options'),'nosniff');
   }
-  console.log('PASS: built Next runtime; standalone login and public assets 200 without workspace navigation; unconfigured workspace503/no-store; six protected API paths across four methods remain503. 31 HTTP response checks.');
+  console.log('PASS: built Next runtime; standalone login and public assets 200 without workspace navigation; unconfigured workspace503/no-store; eleven protected API paths across four methods remain503. 52 HTTP response checks.');
 }finally{
   child.kill();await new Promise(resolve=>{if(child.exitCode!==null||child.signalCode!==null)resolve();else child.once('exit',resolve);});
 }

@@ -23,7 +23,8 @@ test('Car work preserves every frozen staff/finance file byte-for-byte',async()=
   'tests/company-finance.test.ts':'92D8E31F12F21329CBB6FEB62C22A6C6EECB3328835AAA9445BF1DCD06A8CB82',
   'tests/support/operations-fixture.ts':'EFD0737611609206826AA584D0C4B00AF566330ABB57163E27E81212AB653F1A',
   'migrations/006_local_operations_records.up.sql':'D1236225E3F34DCAE489D593419F9E6A2999208D45E23E112F2CB4F1E814B0E0'};
- for(const [file,hash] of Object.entries(frozen))assert.equal(createHash('sha256').update(await readFile(new URL('../'+file,import.meta.url))).digest('hex').toUpperCase(),hash,file);
+ // The pins describe Git text; Windows checkouts may use CRLF.
+ for(const [file,hash] of Object.entries(frozen))assert.equal(createHash('sha256').update((await readFile(new URL('../'+file,import.meta.url),'utf8')).replace(/\r\n/g,'\n')).digest('hex').toUpperCase(),hash,file);
 });
 test('Vehicle registration uniqueness and revision/history guards preserve existing rental snapshots',async t=>{
  const f=await term(t),snapshot=(await f.cars.overview(f.identity,query)).agreements[0].vehicleSnapshot;

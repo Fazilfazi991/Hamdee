@@ -50,6 +50,11 @@ export class PropertyApi {
   carRead(filters,signal){return this.request('/car-rentals?'+new URLSearchParams(filters),{signal});}
   carWrite(body,key,signal){return this.request('/car-rentals/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   rentalRead(filters,signal){return this.request('/rental?'+new URLSearchParams(filters),{signal});}
+  customerRead(filters,signal){return this.request('/customers?'+new URLSearchParams(filters),{signal});}
+  customerProfile(id,filters,signal){return this.request('/customers/'+encodeURIComponent(id)+'?'+new URLSearchParams(filters),{signal});}
+  customerWrite(body,key,signal){return this.request('/customers/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
+  reconciliationRead(filters,signal){return this.request('/reconciliations?'+new URLSearchParams(filters),{signal});}
+  reconciliationWrite(body,key,signal){return this.request('/reconciliations/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   documentRead(filters,signal){return this.request('/documents?'+new URLSearchParams(filters),{signal});}
   documentWrite(body,key,signal){return this.request('/documents',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   expenseRead(filters,signal){return this.request('/expenses?'+new URLSearchParams(filters),{signal});}

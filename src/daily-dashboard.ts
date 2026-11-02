@@ -7,7 +7,7 @@ export const dailyDashboardBasis='Recorded accounts/custody as of date; selected
 export const businessOverviewBasis=Object.freeze({
   totalCollected:'Allocated to issued rent dues for the selected reporting month through the cutoff; not all business revenue. Deposits and unallocated advances are excluded.',
   trendCollections:'Original recorded cash/bank rent and car receipts by actual receipt date. All advances, deposits, pending cheques, transfers and staff handovers are excluded.',
-  expenses:'Recorded property & vehicle costs by expense date. Standalone company/personal ledger expenses are not added; these are not comprehensive business expenses or distributable profit.',
+  expenses:'Recorded property & vehicle costs and company bills by expense date. Personal bills and standalone finance-ledger spends are excluded; this is not distributable profit.',
   balances:'Company accounts with owner-confirmed openings and recorded movements through the cutoff only. Staff custody and personal accounts remain separate.'
 });
 export class DailyDashboardService {
@@ -40,13 +40,13 @@ export class DailyDashboardService {
         FROM receipt_values GROUP BY currency
       ), rent_currencies AS (SELECT currency FROM rent_totals UNION SELECT currency FROM receipt_totals),
       expense_costs AS (
-        SELECT currency,sum(amount_minor) AS recorded_minor FROM hamdee_private.property_expenses
-        WHERE to_char(expense_date,'YYYY-MM')=$1 AND expense_date<=$2::date GROUP BY currency
+        SELECT currency,sum(amount_minor) AS recorded_minor FROM hamdee_private.property_expenses e
+        WHERE to_char(expense_date,'YYYY-MM')=$1 AND expense_date<=$2::date AND coalesce(to_jsonb(e)->>'scope','property')<>'personal' GROUP BY currency
       ), expense_cash AS (
         SELECT e.currency,coalesce(sum(p.amount_minor) FILTER(WHERE p.status='recorded'),0) AS paid_minor,
           coalesce(sum(p.amount_minor) FILTER(WHERE p.status='pending'),0) AS cheque_minor
         FROM hamdee_private.expense_payments p JOIN hamdee_private.property_expenses e ON e.id=p.expense_id
-        WHERE to_char(p.payment_date,'YYYY-MM')=$1 AND p.payment_date<=$2::date GROUP BY e.currency
+        WHERE to_char(p.payment_date,'YYYY-MM')=$1 AND p.payment_date<=$2::date AND coalesce(to_jsonb(e)->>'scope','property')<>'personal' GROUP BY e.currency
       ), expense_currencies AS (SELECT currency FROM expense_costs UNION SELECT currency FROM expense_cash),
       account_values AS (
         SELECT a.*,CASE WHEN a.opening_date<=$2::date THEN coalesce(sum(m.delta) FILTER(WHERE m.business_date<=$2::date),0) ELSE NULL END AS balance
@@ -64,7 +64,7 @@ export class DailyDashboardService {
       ), car_currency_history AS (
         ${installed.cars?`SELECT DISTINCT currency FROM hamdee_private.car_agreements`:`SELECT NULL::text AS currency WHERE false`}
       ), cost_values AS (
-        SELECT currency,expense_date,amount_minor/100.0 AS amount FROM hamdee_private.property_expenses WHERE expense_date<=$2::date
+        SELECT currency,expense_date,amount_minor/100.0 AS amount FROM hamdee_private.property_expenses e WHERE expense_date<=$2::date AND coalesce(to_jsonb(e)->>'scope','property')<>'personal'
         ${installed.cars?`UNION ALL SELECT currency,expense_date,amount FROM hamdee_private.car_expenses WHERE expense_date<=$2::date`:''}
       ), business_currencies AS (
         SELECT currency FROM company_currencies UNION SELECT currency FROM account_values WHERE scope='company'

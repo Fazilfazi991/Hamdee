@@ -5,6 +5,8 @@ import { ApiError, requireThat } from './errors';
 import { uuid } from './validation';
 import { securityLogger,logSafely,type SecurityLogger } from './security-log';
 import { RentalService } from './rental';
+import { CustomerService } from './customers';
+import { ReconciliationService } from './reconciliation';
 import { ExpenseService } from './expenses';
 import { PartnerService } from './partners';
 import { DailyDashboardService } from './daily-dashboard';
@@ -42,9 +44,42 @@ export function createHandler(provider:IdentityProvider,service:PropertyService,
       // Also validate enabled membership before parsing untrusted mutation fields.
       // For operational modules, the full owner portfolio grant is checked in
       // this same transaction; it is never inferred from a role name alone.
-      const session=await service.session(identity,Object.hasOwn(modules,moduleName)||moduleName==='partners'||moduleName==='operations-dashboard'||moduleName==='documents');
+      const session=await service.session(identity,Object.hasOwn(modules,moduleName)||moduleName==='partners'||moduleName==='operations-dashboard'||moduleName==='documents'||moduleName==='customers'||moduleName==='reconciliations');
       requireThat(url.pathname===base||url.pathname.startsWith(base+'/'),404,'NOT_FOUND','Endpoint not found.');
       if(path==='/session'&&request.method==='GET') return json({data:{...session,authenticationProvider:provider.kind||'server-validated'}});
+      if(moduleName==='reconciliations'){
+        const reconciliations=new ReconciliationService(service);
+        if(request.method==='GET'&&path==='/reconciliations'){
+          requireThat([...url.searchParams.keys()].every(k=>['asOf','accountId'].includes(k)&&url.searchParams.getAll(k).length===1),400,'INVALID_QUERY','Check reconciliation filters.');
+          return json({data:await reconciliations.overview(identity,{asOf:url.searchParams.get('asOf')??new Date().toISOString().slice(0,10),accountId:url.searchParams.get('accountId')??undefined})});
+        }
+        requireThat(request.method==='POST'&&path==='/reconciliations/commands',405,'METHOD_NOT_ALLOWED','This method is unavailable.');
+        requireThat([...url.searchParams.keys()].length===0,400,'INVALID_QUERY','Commands do not accept query filters.');
+        requireThat(request.headers.get('origin')===url.origin,403,'ORIGIN_REJECTED','This request origin is not permitted.');
+        const key=request.headers.get('idempotency-key');requireThat(key&&uuid.test(key),400,'IDEMPOTENCY_KEY_REQUIRED','A valid operation key is required.');
+        const result=await reconciliations.mutate(identity,await readJson(request),key,requestId);
+        return json(result,200,result.replay?{'Idempotent-Replay':'true'}:{});
+      }
+      if(moduleName==='customers'){
+        const customers=new CustomerService(service),parts=path.split('/').filter(Boolean);
+        requireThat(parts.length<=3,404,'NOT_FOUND','Endpoint not found.');
+        if(request.method==='GET'&&parts[1]==='documents'&&parts.length===3){
+          requireThat([...url.searchParams.keys()].length===0,400,'INVALID_QUERY','Check the document request.');
+          const file=await customers.getDocument(identity,parts[2]);
+          return new Response(new Uint8Array(file.content),{status:200,headers:{...headers,'Content-Type':file.mimeType,'Content-Disposition':documentDisposition(file.name,file.mimeType),'Content-Security-Policy':"default-src 'none'; sandbox",'Cross-Origin-Resource-Policy':'same-origin'}});
+        }
+        if(request.method==='GET'&&parts.length<=2){
+          requireThat([...url.searchParams.keys()].every(k=>['asOf','q','from','currency'].includes(k)&&url.searchParams.getAll(k).length===1),400,'INVALID_QUERY','Check customer filters.');
+          const asOf=url.searchParams.get('asOf')??new Date().toISOString().slice(0,10);
+          return json({data:parts.length===1?await customers.overview(identity,{asOf,q:url.searchParams.get('q')??undefined}):await customers.profile(identity,parts[1],{asOf,from:url.searchParams.get('from')??undefined,currency:url.searchParams.get('currency')??undefined})});
+        }
+        requireThat(request.method==='POST'&&parts.length===2&&parts[1]==='commands',405,'METHOD_NOT_ALLOWED','This method is unavailable.');
+        requireThat([...url.searchParams.keys()].length===0,400,'INVALID_QUERY','Commands do not accept query filters.');
+        requireThat(request.headers.get('origin')===url.origin,403,'ORIGIN_REJECTED','This request origin is not permitted.');
+        const key=request.headers.get('idempotency-key');requireThat(key&&uuid.test(key),400,'IDEMPOTENCY_KEY_REQUIRED','A valid operation key is required.');
+        const result=await customers.mutate(identity,await readJson(request,2816000),key,requestId);
+        return json(result,200,result.replay?{'Idempotent-Replay':'true'}:{});
+      }
       if(moduleName==='documents'){
         const documents=new DocumentService(service),parts=path.split('/').filter(Boolean);
         requireThat(parts.length<=2,404,'NOT_FOUND','Endpoint not found.');

@@ -11,9 +11,9 @@ let filters={archiveState:'active',q:'',limit:'50',cursor:''},page=null;
 let managed=null,access=null,recoveryView=false,readController=null,writeController=null,authController=null,expiryTimer=null;
 let staffWorkspace=null,staffReady=false,capabilityController=null;
 let carReady=false,companyReady=false,personalReady=false,carWorkspace=null,companyWorkspace=null,personalWorkspace=null;
-let partnerReady=false,partnerWorkspace=null,documentWorkspace=null;
+let partnerReady=false,partnerWorkspace=null,documentWorkspace=null,customerWorkspace=null;
 let moduleStates={};
-function resetOwnerOperations(){resetDailyDashboard();carWorkspace?.resetCarRentals();companyWorkspace?.resetCompanyFinance();personalWorkspace?.resetPersonalFinance();partnerWorkspace?.resetPartners();documentWorkspace?.resetDocuments();}
+function resetOwnerOperations(){resetDailyDashboard();carWorkspace?.resetCarRentals();companyWorkspace?.resetCompanyFinance();personalWorkspace?.resetPersonalFinance();partnerWorkspace?.resetPartners();documentWorkspace?.resetDocuments();customerWorkspace?.resetCustomers();}
 // Retain HAMDEE's paper panels, brass actions, Inter and compact 4px rhythm.
 // Owner access has one primary action; property metadata keeps its existing hierarchy.
 const can=action=>session?.capabilities.includes(action);
@@ -21,7 +21,7 @@ const btn=(label,action,css='',id='')=>`<button type="button" class="button ${cs
 const heading=(title,subtitle,actions='')=>`<div class="page-head"><div><span class="eyebrow">HAMDEE PROPERTY REGISTER</span><h1>${e(title)}</h1><p>${e(subtitle)}</p></div><div class="head-actions">${actions}</div></div>`;
 const unavailable=(title,message)=>`<section class="panel foundation-unavailable"><span class="eyebrow">HAMDEE WORKSPACE</span><h1>${e(title)}</h1><p>${e(message)}</p>${btn('Retry connection','refresh','primary')}</section>`;
 const date=v=>v?new Date(v).toLocaleString('en-GB',{timeZone:'UTC'})+' UTC':'—';
-const nav=[['dashboard','Dashboard','dashboard'],['properties','Villas & Properties','properties'],['car-rentals','Car Rentals','briefcase'],['staff-collections','Staff Collections','partners'],['expenses','Expenses','expenses'],['company','Company Finance','company'],['personal-finance','Personal Finance','wallet'],['partners','Partners & Investments','partners'],['reports','Reports','reports']];
+const nav=[['dashboard','Dashboard','dashboard'],['customers','Customers & Tenants','partners'],['properties','Villas & Properties','properties'],['car-rentals','Car Rentals','briefcase'],['staff-collections','Staff Collections','partners'],['expenses','Expenses','expenses'],['company','Company Finance','company'],['personal-finance','Personal Finance','wallet'],['partners','Partners & Investments','partners'],['reports','Reports','reports']];
 const rentalSections=['rental','rooms','tenants','agreements','collections','cheques','deposits','documents'];
 const expenseSections=['expenses','landlord','utilities','maintenance'];
 // Observe failures immediately while another independently authorized request
@@ -167,7 +167,7 @@ async function refreshProof(){
 function navigation(){
   const route=(window.location.hash.slice(1)||'dashboard').split('/')[0],active=['tenants','collections','cheques'].includes(route)?'properties':route==='maintenance'?'expenses':route;
   const focused=$('#navigation').contains(document.activeElement)?document.activeElement.closest('a')?.getAttribute('href'):null;
-  const enabled=new Set(['dashboard','properties',...(managed!==false?['expenses','reports']:[]),...(staffReady?['staff-collections']:[]),...(carReady?['car-rentals']:[]),...(companyReady?['company']:[]),...(personalReady?['personal-finance']:[]),...(partnerReady?['partners']:[])]);
+  const enabled=new Set(['dashboard','properties',...(managed!==false?['customers','expenses','reports']:[]),...(staffReady?['staff-collections']:[]),...(carReady?['car-rentals']:[]),...(companyReady?['company']:[]),...(personalReady?['personal-finance']:[]),...(partnerReady?['partners']:[])]);
   $('#navigation').innerHTML='<div class="nav-group">WORKSPACE</div>'+nav.map(([id,name,ico])=>enabled.has(id)?`<a class="nav-link ${active===id?'active':''}" href="#${id}" ${active===id?'aria-current="page"':''}>${icon(ico)}<span>${e(name)}</span></a>`:moduleStates[id]==='retry'?`<button type="button" class="nav-link nav-unavailable nav-retry" data-action="retry-modules" title="Retry checking this service">${icon(ico)}<span>${e(name)}</span><small>Retry</small></button>`:`<button type="button" class="nav-link nav-unavailable" disabled>${icon(ico)}<span>${e(name)}</span><small>${moduleStates[id]==='loading'?'Checking…':'Unavailable'}</small></button>`).join('');
   $('#crumb').textContent=nav.find(n=>n[0]===active)?.[1]||'Property workspace';
   if(focused)[...$('#navigation').querySelectorAll('a')].find(link=>link.getAttribute('href')===focused)?.focus();
@@ -226,7 +226,11 @@ async function render(){
   main.classList.toggle('business-overview-page',route==='dashboard');
   main.innerHTML='<div class="empty" role="status"><h2>Loading authorized records…</h2></div>';
   try{
-    if(route==='partners'&&managed){
+    if((route==='customers'||route.startsWith('customers/'))&&managed){
+      current=null;page=null;main.innerHTML=heading('Customers & Tenants','Connected contacts, rentals, payments and private owner KYC.')+'<div id="customer-workspace"></div>';
+      const module=await import('./customers.js');if(!validRead(seq,controller))return;customerWorkspace=module;
+      await module.renderCustomers($('#customer-workspace'),{api,customerId:route.split('/')[1]||null,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
+    }else if(route==='partners'&&managed){
       current=null;page=null;main.innerHTML=heading('Partners & Investments','Contacts, property links and recorded movements')+'<div id="partner-workspace"></div>';
       const module=await import('./partners.js');if(!validRead(seq,controller))return;partnerWorkspace=module;
       await module.renderPartners($('#partner-workspace'),{api,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss});
@@ -240,7 +244,7 @@ async function render(){
         else{const module=await import('./company-finance.js');if(!validRead(seq,controller))return;companyWorkspace=module;await module.renderCompanyFinance($('#operations-workspace'),options);}
       }
     }else if(route.startsWith('properties/')){
-      const [,id,section=managed?'rooms':'overview']=route.split('/'),propertyRequest=api.get(id,controller.signal);
+      const [,id,rawSection=managed?'rooms':'overview']=route.split('/'),section=rawSection.split('?')[0],selection=new URLSearchParams(rawSection.split('?')[1]||''),propertyRequest=api.get(id,controller.signal);
       let prefetchedRental,prefetchedExpenses;
       if(managed&&rentalSections.includes(section))prefetchedRental=settledRead(api.rentalRead({...rentalReportPeriod(),propertyId:id},controller.signal));
       if(managed&&expenseSections.includes(section)){
@@ -250,7 +254,7 @@ async function render(){
       const result=await propertyRequest;if(!validRead(seq,controller)||!await syncAccess(controller.signal)||!validRead(seq,controller))return;current=result.data;
       const p=current;main.innerHTML=heading(p.name,'Property details, rentals and operating history',btn('Back to properties','back')+(can('update')&&p.lifecycleStatus!=='archived'?btn('Edit property','edit','primary'):'')+(can('archive')&&p.lifecycleStatus!=='archived'?btn('Archive','archive','danger'):'')+(can('restore')&&p.lifecycleStatus==='archived'?btn('Restore','restore','primary'):''))+
         `<section class="panel"><div class="detail-meta"><div><small>Property</small><strong>${e(p.name)}</strong></div><div><small>Record lifecycle</small><strong>${e(p.lifecycleStatus)}</strong></div></div></section><div class="tabs" aria-label="Villa workspace"><button class="tab ${section==='overview'?'active':''}" data-action="overview">Overview</button>${managed?`<button class="tab ${rentalSections.includes(section)?'active':''}" data-action="rental">Rooms &amp; rentals</button><button class="tab ${expenseSections.includes(section)?'active':''}" data-action="property-expenses">Expenses &amp; maintenance</button>`:''}${can('audit')?`<button class="tab ${section==='history'?'active':''}" data-action="audit">Audit history</button>`:''}</div><section class="panel" id="detail-content"><div class="panel-header"><div><h2>Property details</h2></div></div><dl class="summary-list">${[['Name',p.name],['Location',p.location||'Not provided'],...(p.archivedAt?[['Archived',date(p.archivedAt)],['Archive reason',p.archiveReason]]:[])].map(([a,b])=>`<div><dt>${e(a)}</dt><dd>${e(b)}</dd></div>`).join('')}</dl></section>`;
-      const options={api,property:p,signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss};
+      const options={api,property:p,...(selection.get('customer')&&selection.get('room')?{initialSelection:{customerId:selection.get('customer'),roomId:selection.get('room')}}:{}),signal:controller.signal,isCurrent:()=>validRead(seq,controller),verifyAccess:()=>syncAccess(controller.signal),onAccessLoss:showAccessLoss};
       if(managed&&section==='documents'){
         const rentalResult=await prefetchedRental;if(!rentalResult.ok)throw rentalResult.error;
         if(!validRead(seq,controller))return;

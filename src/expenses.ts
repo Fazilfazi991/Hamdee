@@ -4,8 +4,9 @@ import { PropertyService } from './service';
 import { requireThat } from './errors';
 import { uuid } from './validation';
 import { text,id,date,month,money,canonical,view,day } from './rental';
+import { cashAccount,moneyEntry,insertOperation,assertFunds } from './company-finance';
 type Row=Record<string,unknown>;
-const categories=['landlord','kahramaa','wifi_utilities','maintenance','cleaning','miscellaneous'];
+const categories=['landlord','kahramaa','wifi_utilities','maintenance','cleaning','miscellaneous','service_charge','company_overhead'];
 const check=(ok:unknown,message:string,code='INVALID_EXPENSE',status=422)=>requireThat(ok,status,code,message);
 const workKey=(s:unknown)=>String(s).trim().replace(/\s+/g,' ').toLowerCase();
 export class ExpenseService {
@@ -24,7 +25,7 @@ export class ExpenseService {
       // payment dates are separate; this is an operational comparison only.
       const rows=(await sql.query<Row>(`WITH keys AS (
         SELECT property_id,currency FROM hamdee_private.rent_dues UNION SELECT property_id,currency FROM hamdee_private.rent_collections
-        UNION SELECT property_id,currency FROM hamdee_private.property_expenses
+        UNION SELECT property_id,currency FROM hamdee_private.property_expenses WHERE property_id IS NOT NULL
       ) SELECT k.property_id,k.currency,
         coalesce((SELECT sum(d.amount_minor) FROM hamdee_private.rent_dues d WHERE d.property_id=k.property_id AND d.currency=k.currency AND d.period=$2),0)::text AS due_minor,
         coalesce((SELECT sum(a.amount_minor) FROM hamdee_private.rent_allocations a JOIN hamdee_private.rent_dues d ON d.id=a.due_id WHERE d.property_id=k.property_id AND d.currency=k.currency AND d.period=$2 AND a.allocated_date<=$3::date),0)::text AS collected_minor,
@@ -41,15 +42,26 @@ export class ExpenseService {
         for(const k of monetary)total[k]=String(BigInt(String(total[k]))+BigInt(String((p as Row)[k])));
         const cats=total.categories as {category:string;amountMinor:string}[];for(const c of p.categories as {category:string;amountMinor:string}[]){const old=cats.find(x=>x.category===c.category);if(old)old.amountMinor=String(BigInt(old.amountMinor)+BigInt(c.amountMinor));else cats.push({...c});}
       }
-      return {expenses:expenses.map(e=>({...view(e),outstandingMinor:String(BigInt(String(e.amount_minor))-BigInt(String(e.paid_minor)))})),payments:payments.map(view),
+      const scopeTotals=new Map<string,Row>();
+      for(const expense of expenses){
+        const scope=String(expense.scope??'property');if(scope==='property')continue;
+        const key=scope+':'+expense.currency;if(!scopeTotals.has(key))scopeTotals.set(key,{scope,currency:expense.currency,recordedMinor:'0',paidMinor:'0',outstandingMinor:'0',pendingChequeMinor:'0'});
+        const total=scopeTotals.get(key)!;
+        if(day(expense.expense_date).slice(0,7)===period&&day(expense.expense_date)<=asOf)total.recordedMinor=String(BigInt(String(total.recordedMinor))+BigInt(String(expense.amount_minor)));
+        if(day(expense.expense_date)<=asOf)total.outstandingMinor=String(BigInt(String(total.outstandingMinor))+BigInt(String(expense.amount_minor))-BigInt(String(expense.paid_minor)));
+        for(const payment of payments.filter(p=>p.expense_id===expense.id&&day(p.payment_date).slice(0,7)===period&&day(p.payment_date)<=asOf)){
+          const field=payment.status==='recorded'?'paidMinor':'pendingChequeMinor';total[field]=String(BigInt(String(total[field]))+BigInt(String(payment.amount_minor)));
+        }
+      }
+      return {scopedSummary:[...scopeTotals.values()],expenses:expenses.map(e=>({...view(e),scope:e.scope??'property',outstandingMinor:String(BigInt(String(e.amount_minor))-BigInt(String(e.paid_minor)))})),payments:payments.map(view),
         jobs:jobs.map(j=>({...view(j),repeatWarnings:jobs.filter(old=>old.id!==j.id&&old.status==='completed'&&old.property_id===j.property_id&&old.room_id===j.room_id&&workKey(old.work_type)===workKey(j.work_type)&&day(old.completed_date)<=day(j.opened_date)).map(old=>({jobId:old.id,vendorName:old.vendor_name,warrantyStartDate:old.warranty_start_date?day(old.warranty_start_date):null,warrantyEndDate:old.warranty_end_date?day(old.warranty_end_date):null,withinWarranty:!!old.warranty_start_date&&day(old.warranty_start_date)<=day(j.opened_date)&&day(old.warranty_end_date)>=day(j.opened_date)}))})),history:history.map(view),summary:{properties,currencies:[...totals.values()]}};
     });
   }
   async mutate(identity:Identity,input:unknown,key:string,requestId:string){
     check(uuid.test(key),'Use a valid operation key.','IDEMPOTENCY_KEY_REQUIRED',400);check(input&&typeof input==='object'&&!Array.isArray(input),'Submit an expense operation.');const b=input as Row;
     const fields:Record<string,string[]>={
-      'record-expense':['propertyId','roomId','category','expenseDate','amount','currency','vendorName','vendorContact','reference','notes','payment'],
-      'record-payment':['expenseId','method','amount','paymentDate','reference'],
+      'record-expense':['scope','propertyId','roomId','category','expenseDate','amount','currency','vendorName','vendorContact','reference','notes','payment'],
+      'record-payment':['expenseId','method','amount','paymentDate','reference','fundingAccountId','fundingCollectorId'],
       'create-job':['propertyId','roomId','workType','issue','openedDate','vendorName','vendorContact','notes'],
       'update-job':['jobId','expectedVersion','vendorName','vendorContact','issue','notes'],
       'complete-job':['jobId','expectedVersion','completedDate','workCompleted','actualCost','currency','warrantyStartDate','warrantyEndDate','reference','notes','payment'],
@@ -58,14 +70,23 @@ export class ExpenseService {
     const action=String(b.action);check(Object.hasOwn(fields,action)&&Object.keys(b).every(k=>k==='action'||fields[action].includes(k)),'Unknown operation or fields.');
     const digest=createHash('sha256').update(canonical(b)).digest('hex');
     return this.properties.ownerContext(identity,async(sql,actorId)=>{
+      // Acquire in the same order as connected rent/finance commands.
+      await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['hamdee-operations-money']);
       await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['expense-command:'+actorId+':'+key]);
       const saved=(await sql.query<{digest:string;result:Row}>('SELECT digest,result FROM hamdee_private.expense_commands WHERE actor_id=$1 AND key=$2',[actorId,key])).rows[0];
       if(saved){check(saved.digest===digest,'Use a new key for a changed submission.','IDEMPOTENCY_KEY_REUSED',409);return {...saved.result,replay:true};}
       const get=async(table:'property_expenses'|'maintenance_jobs',value:unknown)=>{const row=(await sql.query<Row>(`SELECT * FROM hamdee_private.${table} WHERE id=$1`,[id(value)])).rows[0];check(row,'Record not found.','NOT_FOUND',404);return row;};
       let parent:Row|undefined;if(b.jobId)parent=await get('maintenance_jobs',b.jobId);else if(b.expenseId)parent=await get('property_expenses',b.expenseId);
-      const propertyId=parent?String(parent.property_id):id(b.propertyId);
-      await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['property:'+propertyId]);
-      const p=(await sql.query<Row>('SELECT id,lifecycle_status FROM hamdee_private.properties WHERE id=$1',[propertyId])).rows[0];check(p,'Property not found.','NOT_FOUND',404);check(p.lifecycle_status==='registered','Restore the property before changing expenses or jobs.','PROPERTY_ARCHIVED',409);
+      const scope=String(parent?.scope??(action==='record-expense'?b.scope??'property':'property'));
+      check(['property','company','personal'].includes(scope),'Choose property, company or personal expense scope.');
+      const scopedReady=(await sql.query<{ready:boolean}>("SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='hamdee_private.property_expenses'::regclass AND attname='scope' AND NOT attisdropped) AS ready")).rows[0]?.ready;
+      check(scopedReady||scope==='property'&&!['service_charge','company_overhead'].includes(String(b.category)),'Scoped expenses migration is unavailable in this environment.','CONFIGURATION_UNAVAILABLE',503);
+      const propertyId=parent?(parent.property_id===null?null:String(parent.property_id)):scope==='property'?id(b.propertyId):null;
+      check(scope==='property'||b.propertyId===undefined&&b.roomId===undefined,'Company and personal bills do not have a property or room.');
+      if(propertyId){
+        await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['property:'+propertyId]);
+        const p=(await sql.query<Row>('SELECT id,lifecycle_status FROM hamdee_private.properties WHERE id=$1',[propertyId])).rows[0];check(p,'Property not found.','NOT_FOUND',404);check(p.lifecycle_status==='registered','Restore the property before changing expenses or jobs.','PROPERTY_ARCHIVED',409);
+      }
       if(b.jobId)parent=await get('maintenance_jobs',b.jobId);else if(b.expenseId)parent=await get('property_expenses',b.expenseId);
       const roomId=parent?parent.room_id:b.roomId===undefined||b.roomId===null?null:id(b.roomId);
       if(roomId)check((await sql.query('SELECT id FROM hamdee_private.rooms WHERE id=$1 AND property_id=$2',[roomId,propertyId])).rows.length,'This room belongs to another property.','ROOM_PROPERTY_MISMATCH',409);
@@ -73,21 +94,35 @@ export class ExpenseService {
       const insert=async(table:string,values:Row)=>{const entries=Object.entries(values);return (await sql.query<Row>(`INSERT INTO hamdee_private.${table}(${entries.map(([k])=>k).join(',')}) VALUES(${entries.map((_,i)=>'$'+(i+1)).join(',')}) RETURNING *`,entries.map(([,v])=>v))).rows[0];};
       const currency=(v:unknown)=>{const c=text(v,3);check(/^[A-Z]{3}$/.test(c),'Choose an explicit three-letter currency.');return c;};
       const payment=async(expense:Row,value:unknown)=>{
-        check(value&&typeof value==='object'&&!Array.isArray(value),'Enter payment details.');const v=value as Row;check(Object.keys(v).every(k=>['method','amount','paymentDate','reference'].includes(k)),'Check payment fields.');check(['cash','bank','cheque'].includes(String(v.method)),'Choose cash, bank or pending cheque.');
+        check(value&&typeof value==='object'&&!Array.isArray(value),'Enter payment details.');const v=value as Row;check(Object.keys(v).every(k=>['method','amount','paymentDate','reference','fundingAccountId','fundingCollectorId'].includes(k)),'Check payment fields.');check(['cash','bank','cheque'].includes(String(v.method)),'Choose cash, bank or pending cheque.');
         const amount=money(v.amount),reference=text(v.reference??'',200,false);const paid=(await sql.query<{amount:string}>("SELECT coalesce(sum(amount_minor),0)::text AS amount FROM hamdee_private.expense_payments WHERE expense_id=$1 AND status='recorded'",[expense.id])).rows[0];
         check(BigInt(amount)+BigInt(paid.amount)<=BigInt(String(expense.amount_minor)),'Payment exceeds the unpaid expense.','PAYMENT_EXCEEDED',409);
         if(reference)check(!(await sql.query('SELECT id FROM hamdee_private.expense_payments WHERE expense_id=$1 AND method=$2 AND upper(trim(reference))=upper(trim($3))',[expense.id,v.method,reference])).rows.length,'This payment reference is already recorded.','DUPLICATE_PAYMENT',409);
-        return insert('expense_payments',{id:randomUUID(),expense_id:expense.id,property_id:propertyId,method:v.method,amount_minor:amount,payment_date:date(v.paymentDate),reference,status:v.method==='cheque'?'pending':'recorded',event_id:eventId});
+        const row=await insert('expense_payments',{id:randomUUID(),expense_id:expense.id,property_id:propertyId,method:v.method,amount_minor:amount,payment_date:date(v.paymentDate),reference,status:v.method==='cheque'?'pending':'recorded',event_id:eventId});
+        if(v.fundingAccountId!==undefined||v.fundingCollectorId!==undefined){
+          check(v.method!=='cheque'&&!(v.fundingAccountId!==undefined&&v.fundingCollectorId!==undefined),'Choose one funding location for a cash/bank payment.');
+          const account=v.fundingAccountId!==undefined?await cashAccount(sql,v.fundingAccountId):null;
+          const collector=v.fundingCollectorId!==undefined?(await sql.query<Row>('SELECT id FROM hamdee_private.ops_collectors WHERE id=$1',[id(v.fundingCollectorId)])).rows[0]:null;
+          check(account||collector,'Funding collector not found.','NOT_FOUND',404);
+          if(account)check(account.kind===v.method&&account.currency===expense.currency&&day(row.payment_date)>=day(account.opening_date),'Funding account must match currency, method and payment date.','ACCOUNT_MISMATCH',409);
+          const major=(BigInt(amount)/100n)+'.'+String(BigInt(amount)%100n).padStart(2,'0');
+          const entry=await moneyEntry(sql,eventId,{account_id:account?.id??null,collector_id:collector?.id??null,entry_kind:'expense',delta:'-'+major,currency:expense.currency,business_date:row.payment_date,method:v.method,classification:String(expense.scope??'property')+'-expense',reference,notes:'Linked payment for expense '+expense.id});
+          await insertOperation(sql,'ops_expense_keys',{id:randomUUID(),entry_id:entry.id,event_id:eventId});
+          await insertOperation(sql,'expense_funding_links',{payment_id:row.id,entry_id:entry.id,event_id:eventId});
+          await insertOperation(sql,'ops_events',{id:eventId,actor_id:actorId,action:'expense:fund-payment',detail:JSON.stringify({paymentId:row.id,expenseId:expense.id,entryId:entry.id,requestId})});
+          await assertFunds(sql);
+        }
+        return row;
       };
       const expense=async(values:Row)=>{
-        const reference=text(b.reference??'',200,false),vendorName=String(values.vendor_name);if(reference)check(!(await sql.query('SELECT id FROM hamdee_private.property_expenses WHERE property_id=$1 AND lower(trim(vendor_name))=lower(trim($2)) AND upper(trim(reference))=upper(trim($3))',[propertyId,vendorName,reference])).rows.length,'This vendor invoice/reference is already recorded for the property.','DUPLICATE_EXPENSE',409);
-        const row=await insert('property_expenses',{...values,property_id:propertyId,room_id:roomId,reference,notes:text(b.notes??'',2000,false),event_id:eventId});if(b.payment!==undefined&&b.payment!==null)await payment(row,b.payment);return row;
+        const reference=text(b.reference??'',200,false),vendorName=String(values.vendor_name);if(reference)check(!(await sql.query("SELECT id FROM hamdee_private.property_expenses e WHERE property_id IS NOT DISTINCT FROM $1::uuid AND coalesce(to_jsonb(e)->>'scope','property')=$4 AND lower(trim(vendor_name))=lower(trim($2)) AND upper(trim(reference))=upper(trim($3))",[propertyId,vendorName,reference,scope])).rows.length,'This vendor invoice/reference is already recorded in this expense scope.','DUPLICATE_EXPENSE',409);
+        const row=await insert('property_expenses',{...values,...(scopedReady?{scope}:{}),property_id:propertyId,room_id:roomId,reference,notes:text(b.notes??'',2000,false),event_id:eventId});if(b.payment!==undefined&&b.payment!==null)await payment(row,b.payment);return row;
       };
       const warranty=()=>{const start=b.warrantyStartDate===undefined||b.warrantyStartDate===null?null:date(b.warrantyStartDate),end=b.warrantyEndDate===undefined||b.warrantyEndDate===null?null:date(b.warrantyEndDate);check((start===null&&end===null)||(start!==null&&end!==null&&start<=end),'Enter both warranty dates in chronological order, or leave both empty.');return {warranty_start_date:start,warranty_end_date:end};};
       if(action==='record-expense'){
         check(categories.includes(String(b.category)),'Choose a property expense category.');data=await expense({id:entityId,category:b.category,expense_date:date(b.expenseDate),amount_minor:money(b.amount),currency:currency(b.currency),vendor_name:text(b.vendorName,200),vendor_contact:text(b.vendorContact??'',500,false),maintenance_job_id:null});
       }else if(action==='record-payment'){
-        data=await payment(parent!,{method:b.method,amount:b.amount,paymentDate:b.paymentDate,reference:b.reference});entityId=String(data.id);
+        data=await payment(parent!,{method:b.method,amount:b.amount,paymentDate:b.paymentDate,reference:b.reference,...(b.fundingAccountId!==undefined?{fundingAccountId:b.fundingAccountId}:{}),...(b.fundingCollectorId!==undefined?{fundingCollectorId:b.fundingCollectorId}:{})});entityId=String(data.id);
       }else if(action==='create-job'){
         data=await insert('maintenance_jobs',{id:entityId,property_id:propertyId,room_id:roomId,work_type:text(b.workType,120),issue:text(b.issue,2000),opened_date:date(b.openedDate),vendor_name:text(b.vendorName??'',200,false),vendor_contact:text(b.vendorContact??'',500,false),notes:text(b.notes??'',2000,false),event_id:eventId});
       }else {

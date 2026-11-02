@@ -40,7 +40,7 @@ test('Business overview shows five headline KPIs, three simultaneous charts and 
  assert.doesNotMatch(html,/<table|Recently updated properties|Total properties|PRIVATE-TENANT|PRIVATE-COLLECTOR|987654321/);
  assert.match(html,/Allocated to issued rent dues/);assert.match(html,/Separate balances/);assert.match(html,/Recorded property &amp; vehicle costs/);
  assert.match(html,/stroke-dasharray="45 100"/);assert.match(html,/2026[^<]*|Nov 2026/);
- assert.match(html,/<i class="overview-dot allocated"><\/i>Allocated to rent<\/dt><dd><span class="overview-money"><span class="overview-currency">QAR<\/span> 450\.00/);assert.match(html,/class="overview-issued-value"><span class="overview-money"><span class="overview-currency">QAR<\/span> 1,000\.00/);assert.match(html,/Property &amp; vehicle costs/);
+ assert.match(html,/<i class="overview-dot allocated"><\/i>Allocated to rent<\/dt><dd><span class="overview-money"><span class="overview-currency">QAR<\/span> 450\.00/);assert.match(html,/class="overview-issued-value"><span class="overview-money"><span class="overview-currency">QAR<\/span> 1,000\.00/);assert.match(html,/Property, company &amp; vehicle costs/);
 });
 
 test('Only the selected currency is presented; personal balances and currency combinations never enter totals',()=>{

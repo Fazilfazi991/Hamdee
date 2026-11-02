@@ -38,6 +38,8 @@ export class RentalService {
       const historical=historicalOccupantsByRoom(properties,originalRooms,originalTenants);
       const octoberRosterIds=new Set(originalTenants.filter(isOwnerConfirmedOctoberContact).map(row=>String(row.id)));
       const collections=await select('rent_collections'),history=await select('rental_events');
+      const chequesAvailable=Boolean((await sql.query<{ready:boolean}>("SELECT to_regclass('hamdee_private.security_cheques') IS NOT NULL AS ready")).rows[0]?.ready);
+      const securityCheques=chequesAvailable?(await sql.query<Row>(`SELECT c.*,a.property_id,a.room_id,s.status,s.version FROM hamdee_private.security_cheques c JOIN hamdee_private.rental_agreements a ON a.id=c.agreement_id JOIN LATERAL(SELECT status,version FROM hamdee_private.security_cheque_events WHERE cheque_id=c.id AND business_date<=$2::date ORDER BY version DESC LIMIT 1)s ON true WHERE c.received_date<=$2::date AND ($1::uuid IS NULL OR a.property_id=$1) ORDER BY c.received_date,c.id`,[propertyId,asOf])).rows:[];
       const dues=(await sql.query<Row>(`SELECT d.*,coalesce(sum(a.amount_minor),0)::text AS paid_minor,
         (d.amount_minor-coalesce(sum(a.amount_minor),0))::text AS outstanding_minor FROM hamdee_private.rent_dues d
         LEFT JOIN hamdee_private.rent_allocations a ON a.due_id=d.id AND a.allocated_date<=$3::date WHERE ($1::uuid IS NULL OR d.property_id=$1) AND d.period=$2
@@ -67,7 +69,7 @@ export class RentalService {
           occupancyHistory:history.map(c=>({...view(c),internalAgreementId:c.agreement_id})),
           historicalOccupants:historical.get(String(room.id))?.historicalOccupants??[],historicalOccupancyReviewRequired:historical.get(String(room.id))?.historicalOccupancyReviewRequired??false};
       });
-      return {rooms:roomViews,tenants:tenants.map(t=>({...view(t),ownerConfirmedOctoberRoster:octoberRosterIds.has(String(t.id))})),agreements:agreements.map(view),dues:dues.map(d=>({...view(d),status:BigInt(String(d.outstanding_minor))===0n?'paid':BigInt(String(d.paid_minor))>0n?'partial':'pending'})),collections:collections.map(c=>({...view(c),...(c.kind==='advance'&&c.status==='recorded'&&day(c.received_date)<=asOf?{availableAdvanceMinor:String(availableAdvance(c))}:{})})),allocations:allocations.map(view),history:history.map(view),occupancyAvailable,sourceConfirmations:sourceConfirmations.map(view),
+      return {rooms:roomViews,tenants:tenants.map(t=>({...view(t),ownerConfirmedOctoberRoster:octoberRosterIds.has(String(t.id))})),agreements:agreements.map(view),dues:dues.map(d=>({...view(d),status:BigInt(String(d.outstanding_minor))===0n?'paid':BigInt(String(d.paid_minor))>0n?'partial':'pending'})),collections:collections.map(c=>({...view(c),...(c.kind==='advance'&&c.status==='recorded'&&day(c.received_date)<=asOf?{availableAdvanceMinor:String(availableAdvance(c))}:{})})),securityCheques:securityCheques.map(view),allocations:allocations.map(view),history:history.map(view),occupancyAvailable,sourceConfirmations:sourceConfirmations.map(view),
         summary:{totalRooms:rooms.length,occupiedRooms:roomViews.filter(r=>r.occupancy==='occupied').length,vacantRooms:roomViews.filter(r=>r.occupancy==='vacant').length,unverifiedRooms:roomViews.filter(r=>r.occupancy==='unknown').length,currencies:[...summaries].map(([currency,values])=>({currency,...Object.fromEntries(Object.entries(values).map(([k,v])=>[k,String(v)]))}))}};
     });
   }
@@ -81,12 +83,12 @@ export class RentalService {
       'confirm-occupancy':['roomId','tenantId','status','effectiveDate','expectedOccupancyVersion','notes','terms'],
       'confirm-source-reference':['roomId','tenantId','sourceSha256','sourceReference','period','notes'],
       'end-agreement':['agreementId','roomId','tenantId','period','expectedVersion','endDate'],'issue-due':['agreementId','roomId','tenantId','period','dueDate','amount'],
-      'record-collection':['agreementId','roomId','tenantId','period','kind','method','amount','receivedDate','reference','allocations','receivingAccountId','accountConfirmed'],
-      'allocate-advance':['collectionId','dueId','amount','allocationDate'],'refund-deposit':['agreementId','roomId','tenantId','period','amount','receivedDate','method','reference']};
+      'record-collection':['agreementId','roomId','tenantId','period','kind','method','amount','receivedDate','reference','allocations','receivingAccountId','receivingCollectorId','accountConfirmed','notes'],
+      'allocate-advance':['collectionId','dueId','amount','allocationDate'],'refund-deposit':['agreementId','roomId','tenantId','period','amount','receivedDate','method','reference','fundingAccountId']};
     const action=String(b.action);check(Object.hasOwn(fields,action)&&Object.keys(b).every(k=>k==='action'||fields[action].includes(k)),'Unknown operation or fields.');
     const digest=createHash('sha256').update(canonical(b)).digest('hex');
     return this.properties.ownerContext(identity,async(sql,actorId)=>{
-      if(action==='record-collection'&&b.receivingAccountId!==undefined)await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['hamdee-operations-money']);
+      if((action==='record-collection'&&(b.receivingAccountId!==undefined||b.receivingCollectorId!==undefined))||(action==='refund-deposit'&&b.fundingAccountId!==undefined))await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['hamdee-operations-money']);
       await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['rental-command:'+actorId+':'+key]);
       const saved=(await sql.query<{digest:string;result:Row}>('SELECT digest,result FROM hamdee_private.rental_commands WHERE actor_id=$1 AND key=$2',[actorId,key])).rows[0];
       if(saved){check(saved.digest===digest,'Use a new key for a changed submission.','IDEMPOTENCY_KEY_REUSED',409);return {...saved.result,replay:true};}
@@ -202,16 +204,32 @@ export class RentalService {
         }
         data=await insert('rent_collections',{id:entityId,agreement_id:parent!.id,room_id:roomId,property_id:propertyId,currency:parent!.currency,kind,method:b.method,amount_minor:n,received_date:received,reference:text(b.reference??'',200,false),status:pending?'pending':'recorded',event_id:eventId});
         for(const a of allocations)await allocate(data,a.dueId,a.amount,received);
-        if(b.receivingAccountId!==undefined){
-          check(action==='record-collection'&&b.method==='bank'&&b.accountConfirmed===true,'Confirm the receiving bank account for a bank receipt.','ACCOUNT_CONFIRMATION_REQUIRED',409);
-          const account=await cashAccount(sql,b.receivingAccountId,true);
-          check(account.kind==='bank'&&account.currency===parent!.currency,'Choose a company bank account in the rental currency.','ACCOUNT_MISMATCH',409);
-          check(received>=day(account.opening_date),'The receipt date cannot precede the bank account opening date.','ACCOUNT_DATE_MISMATCH',409);
+        if(refund&&b.fundingAccountId!==undefined){
+          const account=await cashAccount(sql,b.fundingAccountId,true);
+          check(account.kind===b.method&&account.currency===parent!.currency&&received>=day(account.opening_date),'Choose a matching company refund funding account.','ACCOUNT_MISMATCH',409);
+          const opsId=randomUUID(),major=(BigInt(n)/100n)+'.'+String(BigInt(n)%100n).padStart(2,'0');
+          const entry=await moneyEntry(sql,opsId,{account_id:account.id,entry_kind:'expense',delta:'-'+major,currency:parent!.currency,business_date:received,method:b.method,classification:'deposit-refund',reference:text(b.reference??'',200,false),notes:'Refund of funded rental deposit '+entityId});
+          await insertOperation(sql,'ops_expense_keys',{id:randomUUID(),entry_id:entry.id,event_id:opsId});
+          await insertOperation(sql,'ops_events',{id:opsId,actor_id:actorId,action:'rental:deposit-refund',detail:JSON.stringify({collectionId:entityId,moneyEntryId:entry.id,requestId})});
+          await assertFunds(sql);data={...data,funding_account_id:account.id};
+        }
+        if(b.receivingAccountId!==undefined||b.receivingCollectorId!==undefined){
+          check(action==='record-collection'&&!pending&&b.accountConfirmed===true,'Confirm the receiving account or collector for this receipt.','ACCOUNT_CONFIRMATION_REQUIRED',409);
+          check(!(b.receivingAccountId!==undefined&&b.receivingCollectorId!==undefined),'Choose one receiving money location.');
+          const account=b.receivingAccountId!==undefined?await cashAccount(sql,b.receivingAccountId,true):null;
+          const collector=b.receivingCollectorId!==undefined?(await sql.query<Row>('SELECT * FROM hamdee_private.ops_collectors WHERE id=$1',[id(b.receivingCollectorId)])).rows[0]:null;
+          check(account||collector,'Collector not found.','NOT_FOUND',404);
+          if(account){
+            check(account.kind===b.method&&account.currency===parent!.currency,'Choose a company account matching the payment method and rental currency.','ACCOUNT_MISMATCH',409);
+            check(received>=day(account.opening_date),'The receipt date cannot precede the account opening date.','ACCOUNT_DATE_MISMATCH',409);
+          }
           const opsEventId=randomUUID(),source=await verifiedReceipt(sql,localReceiptReader,'property-rent',entityId),claim=await sourceClaim(sql,opsEventId,source);
           check(!await activePlacement(sql,claim),'This receipt is already linked to a receiving account.','SOURCE_ALREADY_LINKED',409);
-          const placement=await moneyEntry(sql,opsEventId,{account_id:account.id,entry_kind:'receipt',delta:source.amount,currency:source.currency,business_date:await sourcePlacementDate(sql,claim,source.date),method:source.method,claim_id:claim,classification:source.classification});
+          const businessDate=await sourcePlacementDate(sql,claim,source.date),notes=text(b.notes??'',2000,false);
+          const collection=collector?await insertOperation(sql,'ops_collections',{id:randomUUID(),collector_id:collector.id,claim_id:claim,business_date:businessDate,amount:source.amount,currency:source.currency,method:source.method,classification:source.classification,disposition:'collector-held',account_id:null,owner_confirmed:true,notes,event_id:opsEventId}):null;
+          const placement=await moneyEntry(sql,opsEventId,{account_id:account?.id??null,collector_id:collector?.id??null,collection_id:collection?.id??null,entry_kind:collector?'collection':'receipt',delta:source.amount,currency:source.currency,business_date:businessDate,method:source.method,claim_id:claim,classification:source.classification,notes});
           await assertFunds(sql);await insertOperation(sql,'ops_events',{id:opsEventId,actor_id:actorId,action:'finance:receive',detail:JSON.stringify({data:{id:placement.id,sourceId:entityId},requestId})});
-          data={...data,receiving_account_id:account.id};
+          data={...data,receiving_account_id:account?.id??null,receiving_collector_id:collector?.id??null};
         }else check(b.accountConfirmed===undefined,'Choose a receiving account before confirming it.');
       }else {
         check(parent!.kind==='advance','Choose an advance receipt.');data=await allocate(parent!,b.dueId,b.amount,b.allocationDate);entityId=String(data.id);

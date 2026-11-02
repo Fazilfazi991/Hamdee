@@ -44,7 +44,7 @@ export async function createStaffQaFixture(options: {
     if (options.initialize !== false) {
       await pg.exec(await up());
       const localSql = options.additionalFrozenLocalSql ?? await readFile(new URL('../../migrations/006_local_operations_records.up.sql', import.meta.url), 'utf8');
-      if (!options.additionalFrozenLocalSql) assert.equal(createHash('sha256').update(localSql).digest('hex'), 'd1236225e3f34dcae489d593419f9e6a2999208d45e23e112f2cb4f1e814b0e0');
+      if (!options.additionalFrozenLocalSql) assert.equal(createHash('sha256').update(localSql.replace(/\r\n/g,'\n')).digest('hex'), 'd1236225e3f34dcae489d593419f9e6a2999208d45e23e112f2cb4f1e814b0e0');
       await pg.transaction(tx => tx.exec(localSql));
       await seedOwnerAppRecords(pg);
     }

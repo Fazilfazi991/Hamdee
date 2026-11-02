@@ -1,5 +1,7 @@
 # HAMDEE Property Management CRM
 
+The connected-operations local release adds **Customers & Tenants**, private KYC, security-cheque history, single-save collections and funded bills, company/personal bill scopes, and account reconciliation. See [release evidence and remaining gaps](docs/client-release.md) and [R01–R50 source review](docs/client-requirements-review.md). Migrations 013–016 are local review artifacts; they have not been applied hosted. The complete client brief remains pending source reconciliation and the release gaps listed there.
+
 Standalone Next.js application preserving the HAMDEE interface, managed owner authentication adapter and transactional PostgreSQL property foundation. One approved owner/admin manages multiple properties. Partners and tenants are records, not login roles in this milestone.
 
 The local slice covers managed owner email/password login, property create/edit/archive/restore/history and the existing room, tenant, agreement, dues, collection, deposit, expense, maintenance and report workflows. Dashboard room occupancy and rent balances come from saved records. This authentication change preserves their existing calculations and persistence. CP1/CP2 reference modules and regression coverage are retained.

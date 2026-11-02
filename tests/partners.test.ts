@@ -23,7 +23,7 @@ test('Partner amounts: exact decimals, large values and small fractions without 
   for (const input of ['0', '0.00', '-1', 'NaN', 'Infinity', '1e3', '1,000', '1.0000000000001', '1000000000000000000', 12, null]) assert.throws(() => partnerAmount(input), code('INVALID_PARTNER_AMOUNT'));
 });
 
-const migrationFile=(name:string)=>readFile(new URL('../migrations/'+name,import.meta.url),'utf8');
+const migrationFile=async(name:string)=>(await readFile(new URL('../migrations/'+name,import.meta.url),'utf8')).replace(/\r\n/g,'\n');
 async function hostedPartnerModel(){
   const pg=new PGlite();
   try{

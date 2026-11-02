@@ -207,7 +207,7 @@ export async function startOwnerNativeCluster(runtime: { bin: string; archiveSha
 }
 
 const assetPaths = new Set(['workspace/index.html', 'workspace/adapter.js', 'workspace/app.js', 'workspace/rental.js', 'workspace/expenses.js', 'workspace/foundation.css',
-  'workspace/documents.js','workspace/staff-collections.js','workspace/company-finance.js','workspace/car-rentals.js','workspace/personal-finance.js','workspace/partners.js','workspace/daily-dashboard.js',
+  'workspace/customers.js','workspace/documents.js','workspace/staff-collections.js','workspace/company-finance.js','workspace/car-rentals.js','workspace/personal-finance.js','workspace/partners.js','workspace/daily-dashboard.js',
   'login.html','login.js','login.css',
   'shared/styles.css', 'shared/icons.js', 'shared/hamdee-logo.png', 'shared/inter-latin.woff2']);
 export type OwnerQaHttpHandler = (request: Request) => Promise<Response>;

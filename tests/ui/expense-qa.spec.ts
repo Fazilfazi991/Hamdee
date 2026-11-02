@@ -1,11 +1,19 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
+import {randomUUID} from 'node:crypto';
 import { startOwnerBrowserHarness } from '../support/owner-crm-harness';
 
 let server: Awaited<ReturnType<typeof startOwnerBrowserHarness>>;
 const villa = '=Synthetic Expense Browser Villa';
 test.setTimeout(120_000);
-test.beforeEach(async () => { server = await startOwnerBrowserHarness(); await mkdir('evidence/expense-qa', { recursive: true }); });
+test.beforeEach(async () => {
+ server = await startOwnerBrowserHarness({migrationFiles:['006_local_operations_records.up.sql','011_local_owner_occupancy.up.sql','014_local_connected_funding.up.sql']});
+ await server.fixture.login();
+ for(const kind of ['cash','bank']){
+  const result=await server.fixture.request('POST','/api/hamdee/v1/company-finance/commands',{action:'create-account',name:'Synthetic expense '+kind,scope:'company',kind,currency:'QAR',openingDate:'2026-10-01',openingAmount:'10000',ownerConfirmedOpening:true},{'Idempotency-Key':randomUUID()});expect(result.status).toBe(200);
+ }
+ await mkdir('evidence/expense-qa', { recursive: true });
+});
 test.afterEach(async () => { await server?.close(); });
 async function login(page: Page) {
   await page.goto(server.url + '/workspace/index.html#dashboard'); await page.getByLabel('Email', { exact: true }).fill(server.fixture.inputs.email); await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
@@ -25,6 +33,7 @@ async function open(page: Page, name: string) { await page.getByRole('button', {
 async function save(dialog: Locator) { await dialog.getByRole('button', { name: 'Save expense record', exact: true }).click(); await expect(dialog).not.toBeVisible(); }
 async function payment(dialog: Locator, method: string, amount: string, date: string, reference: string) {
   await dialog.getByLabel('Payment method', { exact: true }).selectOption({ label: method }); await dialog.getByLabel('Payment amount', { exact: true }).fill(amount); await dialog.getByLabel('Payment date', { exact: true }).fill(date); await dialog.getByLabel('Payment reference (optional)', { exact: true }).fill(reference);
+  if(method!=='Cheque (pending only)')await dialog.locator('select[name="fundingLocation"]').selectOption({label:'Synthetic expense '+method.toLowerCase()+' · QAR'});
 }
 async function expenseForm(page: Page, amount = '1000.25', paid = false) {
   const d = await open(page, 'Add property expense'); await d.getByLabel('Expense category', { exact: true }).selectOption({ label: 'Landlord rent / payment' });
@@ -57,7 +66,9 @@ test('Expense UI QA: owner costs/partial payments/maintenance/warranty/history/r
   await expect(jobRow(page, 'Synthetic first leaking AC').getByRole('button', { name: 'Complete job', exact: true })).toHaveCount(0); await expect(expenses.getByRole('row')).toHaveCount(3);
   await createJob(page, 'Synthetic repeat AC issue', '2026-10-10'); await expect(jobRow(page, 'Synthetic repeat AC issue')).toContainText('Possible warranty coverage');
   await jobRow(page, 'Synthetic first leaking AC').getByRole('button', { name: 'Job history', exact: true }).click(); d = page.locator('#expense-dialog'); await expect(d).toContainText('Synthetic replacement of faulty part'); await expect(d).toContainText('2026-10-31'); await d.getByRole('button', { name: 'Close', exact: true }).click();
-  await page.reload(); await page.getByRole('button', { name: 'Expenses & maintenance', exact: true }).click(); await expect(page.getByRole('region', { name: 'Property expense register', exact: true }).getByRole('row')).toHaveCount(3);
+  await page.reload(); await page.getByRole('button', { name: 'Expenses & maintenance', exact: true }).click();
+  await page.getByLabel('Expense month',{exact:true}).fill('2026-10');await page.getByLabel('Report through',{exact:true}).fill('2026-10-15');await page.getByRole('button',{name:'Apply expense filters',exact:true}).click();
+  await expect(page.getByRole('region', { name: 'Property expense register', exact: true }).getByRole('row')).toHaveCount(3);
   const summary = page.getByRole('region', { name: 'Property monthly income and expenses', exact: true }); await expect(summary.getByRole('cell', { name: 'QAR 1250.75', exact: true })).toBeVisible(); await expect(summary.getByRole('cell', { name: 'QAR -1250.75', exact: true })).toBeVisible(); await expect(summary.getByRole('cell', { name: 'QAR 1100.50', exact: true })).toBeVisible();
   const downloaded = page.waitForEvent('download'); await page.getByRole('button', { name: 'Download monthly CSV', exact: true }).click(); const download = await downloaded;
   expect(download.suggestedFilename()).toBe('HAMDEE-operations-2026-10.csv'); const stream = await download.createReadStream(); expect(stream).toBeTruthy(); const chunks: Buffer[] = []; for await (const chunk of stream!) chunks.push(Buffer.from(chunk)); const csv = Buffer.concat(chunks).toString('utf8');

@@ -113,7 +113,7 @@ test('Quick collection UI uses existing explicit commands and does not submit co
  const source=await readFile(new URL('../public/workspace/rental.js',import.meta.url),'utf8'),app=await readFile(new URL('../public/workspace/app.js',import.meta.url),'utf8');
  assert.match(source,/Collect rent','quick-room'/);assert.match(source,/Collection month','month'/);assert.match(source,/Confirm tenant and rent details/);
  assert.match(source,/requiresTermsConfirmation/);assert.match(source,/delete body\.confirmTerms/);
- assert.match(source,/state\.action==='quick-month'/);assert.match(source,/Company cash or bank placement is a separate confirmed step/);
+ assert.match(source,/state\.action==='quick-month'/);assert.match(source,/The receipt, allocation and money location save together/);
  assert.match(app,/window\.location\.replace\('\/login'\)/);assert.match(app,/pageshow/);assert.match(app,/event\.persisted/);
  assert.doesNotMatch(source,/create-classified-receipt|\.financeWrite\(|automatic proration enabled/);
  const css=await readFile(new URL('../public/workspace/foundation.css',import.meta.url),'utf8');assert.match(css,/#rental-save\[hidden\]\{display:none\}/);
