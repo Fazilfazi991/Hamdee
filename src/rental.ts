@@ -1,3 +1,4 @@
+import {effectiveLedgerSql} from './effective-ledgers';
 import { createHash,randomUUID } from 'node:crypto';
 import type { Identity } from './auth';
 import { PropertyService } from './service';
@@ -22,6 +23,7 @@ export class RentalService {
   async overview(identity:Identity,query:{month:string;asOf:string;propertyId?:string}) {
     const period=month(query.month),asOf=date(query.asOf),propertyId=query.propertyId?id(query.propertyId):null;
     return this.properties.ownerContext(identity,async sql=>{
+      sql=await effectiveLedgerSql(sql);
       const select=async(table:string,field='property_id')=>(await sql.query<Row>(`SELECT * FROM hamdee_private.${table} ${field?'WHERE ($1::uuid IS NULL OR '+field+'=$1)':''} ORDER BY id`,field?[propertyId]:[])).rows;
       const rooms=await select('rooms'),agreements=await select('rental_agreements'),tenants=await select('tenants','');
       const occupancyAvailable=Boolean((await sql.query<{ready:boolean}>("SELECT to_regclass('hamdee_private.room_occupancy_confirmations') IS NOT NULL AND to_regclass('hamdee_private.source_roster_confirmations') IS NOT NULL AS ready")).rows[0]?.ready);
@@ -88,6 +90,7 @@ export class RentalService {
     const action=String(b.action);check(Object.hasOwn(fields,action)&&Object.keys(b).every(k=>k==='action'||fields[action].includes(k)),'Unknown operation or fields.');
     const digest=createHash('sha256').update(canonical(b)).digest('hex');
     return this.properties.ownerContext(identity,async(sql,actorId)=>{
+      sql=await effectiveLedgerSql(sql);
       if((action==='record-collection'&&(b.receivingAccountId!==undefined||b.receivingCollectorId!==undefined))||(action==='refund-deposit'&&b.fundingAccountId!==undefined))await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['hamdee-operations-money']);
       await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['rental-command:'+actorId+':'+key]);
       const saved=(await sql.query<{digest:string;result:Row}>('SELECT digest,result FROM hamdee_private.rental_commands WHERE actor_id=$1 AND key=$2',[actorId,key])).rows[0];
@@ -210,6 +213,7 @@ export class RentalService {
           const opsId=randomUUID(),major=(BigInt(n)/100n)+'.'+String(BigInt(n)%100n).padStart(2,'0');
           const entry=await moneyEntry(sql,opsId,{account_id:account.id,entry_kind:'expense',delta:'-'+major,currency:parent!.currency,business_date:received,method:b.method,classification:'deposit-refund',reference:text(b.reference??'',200,false),notes:'Refund of funded rental deposit '+entityId});
           await insertOperation(sql,'ops_expense_keys',{id:randomUUID(),entry_id:entry.id,event_id:opsId});
+          if((await sql.query<{ready:boolean}>("SELECT to_regclass('hamdee_private.rental_refund_funding_links') IS NOT NULL AS ready")).rows[0]?.ready)await insertOperation(sql,'rental_refund_funding_links',{collection_id:entityId,entry_id:entry.id,event_id:opsId});
           await insertOperation(sql,'ops_events',{id:opsId,actor_id:actorId,action:'rental:deposit-refund',detail:JSON.stringify({collectionId:entityId,moneyEntryId:entry.id,requestId})});
           await assertFunds(sql);data={...data,funding_account_id:account.id};
         }

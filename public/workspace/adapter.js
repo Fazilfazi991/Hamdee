@@ -54,6 +54,13 @@ export class PropertyApi {
   customerProfile(id,filters,signal){return this.request('/customers/'+encodeURIComponent(id)+'?'+new URLSearchParams(filters),{signal});}
   customerWrite(body,key,signal){return this.request('/customers/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   reconciliationRead(filters,signal){return this.request('/reconciliations?'+new URLSearchParams(filters),{signal});}
+  correctionRead(filters,signal){return this.request('/financial-corrections?'+new URLSearchParams(filters),{signal});}
+  correctionWrite(body,key,signal){return this.request('/financial-corrections/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
+  principalRead(filters,signal){return this.request('/principal?'+new URLSearchParams(filters),{signal});}
+  principalWrite(body,key,signal){return this.request('/principal/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
+  sourceReportRead(filters,signal){return this.request('/source-reports?'+new URLSearchParams(filters),{signal});}
+  supportingRead(filters,signal){return this.request('/supporting-records?'+new URLSearchParams(filters),{signal});}
+  supportingWrite(body,key,signal){return this.request('/supporting-records/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   reconciliationWrite(body,key,signal){return this.request('/reconciliations/commands',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}
   documentRead(filters,signal){return this.request('/documents?'+new URLSearchParams(filters),{signal});}
   documentWrite(body,key,signal){return this.request('/documents',{method:'POST',signal,headers:{'Content-Type':'application/json','Idempotency-Key':key,...(this.csrfToken?{'X-Hamdee-CSRF':this.csrfToken}:{})},body:JSON.stringify(body)});}

@@ -1,3 +1,4 @@
+import {effectiveLedgerSql} from './effective-ledgers';
 import type {Identity} from './auth';
 import {PropertyService} from './service';
 import {date,month} from './rental';
@@ -15,6 +16,7 @@ export class DailyDashboardService {
   async overview(identity:Identity,query:{month:string;asOf:string}) {
     const period=month(query.month),asOf=date(query.asOf);
     return this.properties.ownerContext(identity,async sql=>{
+      sql=await effectiveLedgerSql(sql);
       const installed=(await sql.query<{ready:boolean;cars:boolean}>(`SELECT to_regclass('hamdee_private.ops_money') IS NOT NULL
         AND to_regclass('hamdee_private.ops_accounts') IS NOT NULL AND to_regclass('hamdee_private.ops_collectors') IS NOT NULL AS ready,
         to_regclass('hamdee_private.car_receipts') IS NOT NULL AND to_regclass('hamdee_private.car_expenses') IS NOT NULL

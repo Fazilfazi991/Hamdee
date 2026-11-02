@@ -1,65 +1,79 @@
-# Connected customer operations — local release candidate
+# HAMDEE — continuation release package
 
-Prepared 2 November 2026. This is a tested local development package, **not a completed Production release or full R01–R50 acceptance**. The exact local source commit is supplied in the handoff. No push, deployment, hosted migration, historical posting or live KYC import was performed.
+Prepared 2 November 2026, continuing candidate `6a0397303025f23013e2997f955471d95e925352`. The final source commit is supplied in the coordinator's handoff after committing this package. Production remains unchanged: no push, provisioning, hosted migration, deployment, historical financial posting or live KYC import was performed.
 
-## Delivered behavior
+## Source and requirements
 
-- Customers & Tenants reuses tenant IDs and explicitly links car rentals. Profiles combine contact/occupancy history, property and vehicle terms, dues, allocations, receipts, advances, funded deposits, cheque events, private KYC and original audit events. Property and car statements retain their respective monetary precision, dates and currencies.
-- Cash/bank rent entry saves the receipt, allocation and selected company account or collector custody in one transaction. Replays do not duplicate financial records. Advances, pending cheques and deposits remain separate.
-- Property/company/personal bills support unpaid and partial payment states. Each paid entry links to its actual account or collector outflow. Later payments settle the original bill. Personal costs stay outside property/company operating-cost reports. Service-charge and company-overhead categories are available.
-- Security cheques remain noncash until explicitly presented and cleared into a confirmed bank account. Property-linked clearance posts to the existing rental deposit ledger. Returns, cancellation, bounce, replacements, private cheque images, funded refunds and explicit clearance reversal retain history. Bank reversal and re-receiving a reversed cheque cannot bypass the cheque ledger.
-- KYC can be entered during customer creation and retained in later revisions. Private PDF/JPEG/PNG files are limited to 1 MB each, checked by signature and downloaded through owner-authorized endpoints. Uploading leaves review pending. Identity numbers are masked until explicit owner reveal. Financial CSVs exclude KYC fields.
-- Company/personal account reconciliations retain the calculated balance, actual count, date, explanation and difference. They create no money movement. Later backdated entries do not overwrite the original counted snapshot.
+The private handoff was recovered and reviewed: README/CONTINUATION first, all 17 manifest files verified, the original R01–R47 workbook wording and Q01–Q14 list, both workbooks, Malayalam transcript, timestamped English evidence notes and R48–R50 additions. Private originals remain outside Git. The uncertain word near 00:15 stays unresolved under Q05; no fines were added.
 
-## Evidence and limits
+The [R01–R50 implementation mapping](client-requirements-review.md) links each original requirement to code, tests and its affected business hold. The final mapping has **46 Implemented locally**, **4 Needs business decision** (R29/R31/R33/R34), **0 Partial**, **0 Missing** and **0 Hosted verified**. Unanswered source questions hold only affected historical values or formulas; they do not block confirmed daily receipts, costs, corrections or counts.
 
-Final verification: **620 regression tests passed, zero failures/skips**, including 24 focused new service/acceptance cases. Typecheck, ESLint, optimized build and 52 built-runtime HTTP checks passed. Thirty-four selected desktop/mobile customer, rental, expense, navigation and private-document cases were verified across the final and targeted regression runs. The final broad run also passed the existing standalone partner browser acceptance.
+## Completed continuation
 
-The end-to-end browser test uses the real workspace, HTTP handlers and disposable synthetic PGlite with a constructor-injected fake provider. It covers customer creation with private KYC, room prefill, 2,000 due / 1,200 collection / 800 outstanding, a 600 bill / 200 payment / 400 unpaid, cheque clearance, account reconciliation, personal bills, financial CSV privacy and document denial after logout. Both desktop and mobile passed.
+- Source-level corrections for funded bill payments and funded rental/security deposit refunds retain the original, reason, actor, exact compensating money entry and optional replacement. Earlier business-date cutoffs retain the original effect; later cutoffs use compensation/replacement. Replays and competing corrections cannot duplicate outflows. Unsafe standalone reversals and corrections invalidating later available-funds balances remain denied.
+- Collector opening/count records and account denomination counts preserve calculated versus declared/actual balances, currency, difference and explanation. Counts create no withdrawal, expense or handover. Later backdated entries cannot overwrite an original reconciliation snapshot.
+- Principal ledgers separate money owed to HAMDEE from money HAMDEE owes. Opening obligations create no cash unless actual funding is explicitly entered. Partial repayments, principal amendments and linked correction/replacement history use exact currencies and decimals without becoming rent, interest or fees.
+- Excel 2 reports show the tenant schedule, landlord, service charge, separate utility-account bills, detailed costs and property result. Sheet15-style owner summaries separate scheduled rent, actual collections, recorded costs, paid outflows, owner transfers and partner records. Unconfirmed share/Extra/owner-attribution results remain null with the applicable question, rather than fabricated zeros or payouts.
+- Supporting landlord due-day/frequency, multiple Kahramaa accounts, Wi-Fi/service references, policy/investment details and furniture/asset locations use a simple non-posting reference register with revisions. Confirmed room order and retained source provenance preserve the monthly register order. Partial-month terms require an explicit amount; no general proration is invented.
+- Sanitized imported-customer acceptance verifies property-scoped room identities, distinct same-name contacts, retained October/November source versions and explicit property/car links to existing IDs. Occupant changes preserve prior dues, receipts, deposits, KYC and optional private room documents. Customer profiles also show linked principal, supporting records and source/money histories. Car collections now save the receipt and chosen account/collector funds together.
 
-Independent service tests also cover collector 1,200 / handover 1,000 / remaining 200, collector-funded costs, competing retries, failed-save rollback, missing/expired KYC, short identifier masking, explicit car links with precise filtered statements, cheque replacement/returns/bounce/refunds and linked clearance corrections. Account reconciliation preserves exact decimals and earlier snapshots. A disk close/reopen and service reconstruction test preserves private document bytes, the 800 rent balance, one funded bill and command replay; disabling the owner afterward denies document access.
+Native PostgreSQL verification also found a calendar-date decoding defect in the local Asia/Calcutta timezone. HAMDEE pools now retain PostgreSQL DATE values as YYYY-MM-DD strings, keeping source receipt and linked money dates aligned; timestamp decoding remains unchanged. Coverage is in `tests/calendar-date.test.ts` and the native continuation suite.
 
-Measured final local browser samples (milliseconds; individual observations, not percentiles):
+The original customer, KYC, cheque, collection, expense and reconciliation features are retained. Pending security-cheque face values remain separate from available cash and funded deposits. KYC upload is not verification, files remain owner-authorized, and normal financial exports exclude identity-document details.
 
-| Action | Desktop | Mobile |
-| --- | ---: | ---: |
-| Customer list navigation | 315 | 281 |
-| Customer profile navigation | 322 | 237 |
-| Customer with KYC save | 208 | 175 |
-| Connected rent save | 165 | 200 |
-| Paid property bill save | 236 | 214 |
-| Held cheque save | 244 | 344 |
-| Confirmed cheque clearance | 241 | 275 |
-| Account reconciliation | 270 | 208 |
-| Later personal bill payment | 248 | 209 |
+## Verification of the integrated source
 
-Raw local evidence is under ignored `evidence/connected-customers/`. These results do not establish hosted latency, real-provider behavior, native PostgreSQL concurrency, or Production-data reconciliation.
+| Verification | Result and boundary |
+| --- | --- |
+| Full local regression | **647/647 passed; zero failures, skips or TODOs**, 883,779 ms. The 43 affected UI source contracts were repeated successfully after the final UI fixes; they are already included in this inventory. Synthetic local data; PGlite and injected Auth are not hosted evidence. |
+| Actual native PostgreSQL | **28/28 passed** on owned loopback PostgreSQL 17.11: legacy, owner, car/finance and populated continuation-upgrade suites. Includes independent sessions, retries/conflicts, rollback, least privilege and actual database/application restart checks. See [native testing](native-testing.md). |
+| Complete desktop/mobile browser regression | **208/208 passed; zero failures/skips**, desktop and mobile, 370,672 ms (6.2 minutes), two isolated workers. Earlier discovery/targeted runs are excluded from this unique count. |
+| Typecheck / ESLint | **Passed on the final implementation.** |
+| Optimized application build | **Passed on the final implementation.** |
+| Built runtime HTTP checks | **81 checks passed on the final implementation.** |
+| Actual hosted provider/database/Preview acceptance | **Not run; no Hosted verified claim.** |
 
-## Requirements and remaining work
+The retained legacy financial-reference suite separately reports 53 passed, 16 TODO decision gates and zero failures across 69 cases. These are historical reference diagnostics, not added to the 647-test count or a substitute for live connected-workflow acceptance.
 
-See [source review and R01–R50 mapping](client-requirements-review.md). The original R01–R47 wording and original fourteen questions are unavailable because `HAMDEE_Client_Requirements_Review.xlsx` is missing. Both original Excel files were inspected read-only; the Malayalam video narration is still unverified. None of those gaps is disguised as an implemented requirement.
+The new focused acceptance sources cover source compensation, collector counts, principal directions/repayments, report math, private-file denial, canonical imported-customer matching, optional-document preservation and restart persistence. Native tests use synthetic records and fresh owned clusters; they do not touch an existing/shared service or prove real-provider authentication.
 
-R48 and R50 work locally. R49's connected profiles work locally; final source matching and comprehensive imported-customer acceptance remain pending. The following also remain explicit release gaps:
+EX05 reproduces `53,500 − 34,000 − 500 − 9,664 − 3,180 = 6,156` as a **scheduled-rent result**, not cash. The original report's currency is unconfirmed; write tests use explicit synthetic XTS. Four utility references reproduce 9,664. EX07's raw three-share result leaves a remainder; no share rule or remainder payout is inferred.
 
-- Exact Excel 2 / Sheet15 report reconciliation, source vehicle identity decisions and supporting-record reconciliation.
-- A structured original-principal / repayment relationship for outside receivables and loans; classified receipts alone do not implement that ledger.
-- Coordinated correction/replacement of an already funded bill payment or refunded deposit. Unsafe standalone money reversals are denied instead of leaving the source balance stale.
-- Actual counted reconciliation currently covers company/personal accounts; collector balances and handovers have dated ledgers, but collector count capture is not implemented.
-- Hosted/native acceptance and a working hosted Preview. Current runtime activation pins remain unchanged; an unconfigured build correctly denies protected operations.
+Repeated performance evidence uses five retained samples per action/viewport after one warm-up, measured from Playwright action to visible completion over loopback HTTP with the real workspace, PGlite and an injected fake provider. Navigation timing ends when the core customer profile and linked property row are visible; optional later panels are outside that measurement. Save timing ends at the exact updated balance. The following continuation sample set is local, not hosted latency or a percentile guarantee:
 
-Business decisions still required are the original fourteen source questions when recovered; confirmed ambiguous rent/currency/opening data; vehicle identities; personal account ownership/classification; and partner percentages, calculation basis and rounding. The only new question groups are the proposed cheque lifecycle/evidence/refund handling and mandatory KYC fields/documents/review rules. No universal share, proration, regulatory-document requirement or KYC collection block was introduced.
+| Action | Desktop n / median / min–max ms | Mobile n / median / min–max ms |
+| --- | --- | --- |
+| Customer profile navigation | 5 / 179 / 170–190 | 5 / 194 / 166–226 |
+| Connected collection save | 5 / 224 / 214–253 | 5 / 170 / 120–198 |
 
-## Migration and recovery package
+Raw samples are in ignored `evidence/continuation-performance/{desktop,mobile}.json`; these final samples come from a separate sequential two-case repeat after the complete browser run. Those two cases are already in the 208-case inventory and are not counted again. Hosted sample count is zero. Business-date report cutoffs are not immutable recorded-through snapshots when genuinely backdated records are later supplied; original records, compensations and reconciliation snapshots remain retained.
 
-Existing migrations remain unchanged. New artifacts are local-only and must **not** be replayed directly against a hosted or Production database:
+## Migration, preservation and recovery
 
-1. `013_local_customers_kyc_cheques.up.sql` — private customer KYC, links, cheque history, refunds and correction safeguards; requires existing 001–004/006/007.
-2. `014_local_connected_funding.up.sql` — immutable bill-payment funding evidence and collector spending safeguards.
-3. `015_local_account_reconciliation.up.sql` — retained account-count comparisons, without balance adjustments.
-4. `016_local_scoped_expenses.up.sql` — preserve existing bills as property scope and add company/personal bills and source categories.
+The [destination-specific migration decision plan](migration-plan.md) reconciles the actual Git ancestry: an earlier **013 car-source** migration and this candidate's different **013 customer/KYC/cheque** migration are unrelated identities. Deletion from Git is not evidence that an applied database was rolled back. Migrations 001–016 are unchanged; no applied migration is overwritten or renumbered.
 
-Before any approved hosted execution, inspect the exact project/database/schema/roles and migration state; inventory existing rows and immutable IDs; prepare a restricted, transaction-consistent schema/data snapshot including private document bytes; verify its integrity and a restore into an isolated destination; and record the restore procedure and snapshot location privately. No live database snapshot was taken in this development session. Keep snapshots and credentials outside Git and public artifacts.
+Local continuation artifacts are 017 (source-compatible corrections and dated effective ledgers), 018 (collector openings/counts and optional denomination evidence), and 019 (principal and supporting references). They are local-only rehearsal sources, not scripts to replay on Production. The populated upgrade and native preservation checks retain existing occupancy/source confirmations, optional private documents, vehicle references, stable IDs, historical transactions, RLS and permissions.
 
-Then prepare a destination-specific transactional migration plan, compare preservation counts and grants, and test against a separate disposable destination. Restore from the verified snapshot for recovery; do not run local reset/down scripts or delete live records. Approval must cover that exact destination, snapshot, migration plan and deployment. Historical financial postings and live KYC imports require separate explicit authorization.
+Existing reviewed connection pins identify Supabase project `dytlzfwbgeuhzgzemqsf`, Singapore, transaction-pooler mode and restricted `hamdee_backend` access. Pins are **non-null**. Migration-history and application-marker reads were denied by the connected account; the actual hosted schema, applied migration identities, data class, business-data inventory and recovery snapshot are therefore **unverified**. No unrelated project was used as a substitute.
 
-No hosted Preview was created because this brief does not authorize deployment. The local source package is ready for review; unresolved gaps above prevent claiming the full client implementation is finished.
+Before any authorized hosted write, read that exact destination's marker, version, migration ledger and object fingerprints, then select the matching branch of the migration plan. Prepare a private transaction-consistent schema/data snapshot, including revisions, command/audit rows and private-file content hashes/bytes; verify checksum and restore it into an isolated destination. Compare UUID sets, row hashes, grants and currency/date totals before and after. No live snapshot or hosted restore was performed here. Local restart/preservation evidence is not a claim of a tested hosted backup.
+
+The final hosted SQL must follow the observed destination state, use a unique migration identity and preserve any already applied car 013 or customer 013. A partial/drifted schema needs a specific forward repair; do not hide it with blanket IF NOT EXISTS or run local reset/down scripts against Production.
+
+## Exact remaining business holds and hosted permissions
+
+The original private Q01–Q14 list remains the decision authority. Its affected holds are:
+
+- Q01/Q02/Q14: historical opening dates, currencies, ownership and cash/credit/custody/liability classifications.
+- Q03: whether a difference is an approved owner movement; the default is an explained difference without a posting.
+- Q04/Q05/Q06: uncertain deposit/advance/cheque components, unclear speech and due-day/range text. No invented fines or move-in dates.
+- Q07/Q08/Q10: real historical occupant, property/room and vehicle identity decisions. Representative matching works; uncertain real identities are not merged or made active automatically.
+- Q09/Q12: utility column/formula relationships and whether a single proration example is a general rule. Affected unconfirmed formulas remain held.
+- Q11: property-specific partner identities, percentages, calculation basis, rounding and remainder. No automatic share or payout.
+- Q13/Q14: whether supplementary references are current and how missing dates/currencies/owner-attribution are classified. No fabricated historical transactions.
+
+Only two additional decision groups concern the proposed cheque lifecycle/clearance/refund evidence and mandatory KYC fields/documents/review rules. No mandatory KYC collection block or new regulatory claim was introduced.
+
+The proposed hosted acceptance target is an explicitly targeted Preview in the **existing HAMDEE hosting project**, connected only to an inspected isolated synthetic database. The pinned development project may be used only after its marker/schema/data class and separation from Production are proven; deployment protection alone is not database isolation.
+
+The genuinely missing hosted access/approvals are grouped together: (1) grant the connected account read access to the exact pinned project's migration/schema/marker/role metadata and preservation inventory; (2) confirm the isolated synthetic destination and private snapshot/restore procedure; and (3) approve the resulting destination-specific migration and explicitly targeted Preview deployment on the exact final commit. No provisioning, push, migration or deployment is inferred from this development brief. Historical financial postings, live KYC imports and later Production release still require their applicable explicit authorization.

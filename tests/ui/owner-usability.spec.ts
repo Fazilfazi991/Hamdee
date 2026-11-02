@@ -223,8 +223,12 @@ test('owner views avoid redundant rental and villa property-register reads witho
 });
 
 test('collection choices follow the selected agreement and keep deposits, advances and pending cheques distinct', async ({ page }, info) => {
+  await server.close();
+  server=await startOwnerBrowserHarness({migrationFiles:['006_local_operations_records.up.sql','007_local_car_rentals.up.sql','008_local_partner_records.up.sql','009_local_partner_corrections.up.sql','011_local_owner_occupancy.up.sql','012_local_private_documents.up.sql','013_local_customers_kyc_cheques.up.sql','014_local_connected_funding.up.sql','015_local_account_reconciliation.up.sql','016_local_scoped_expenses.up.sql','017_local_corrections_and_source_compatibility.up.sql','018_local_collector_counts.up.sql','019_local_principal_supporting_records.up.sql']});
   const a = await seedPropertyReceipt(server.fixture, { amount: '100.00' });
   const b = await seedPropertyReceipt(server.fixture, { amount: '200.00' });
+  const opening=await server.fixture.request('POST','/api/hamdee/v1/company-finance/commands',{action:'create-account',name:'Synthetic usability receiving bank',scope:'company',kind:'bank',currency:'QAR',openingDate:'2026-10-01',openingAmount:'0',ownerConfirmedOpening:true},{'Idempotency-Key':randomUUID()});
+  expect(opening.status).toBe(200);const bank=(await opening.json()).data;
   await login(page);
   await page.goto(server.url + '/workspace/index.html#collections');
   await page.getByLabel('Rent month', { exact: true }).fill('2026-10');
@@ -233,15 +237,18 @@ test('collection choices follow the selected agreement and keep deposits, advanc
   await page.getByRole('button', { name: 'Record collection', exact: true }).click();
   const d = page.locator('#rental-dialog');
   const due = d.getByLabel('Allocate rent to due', { exact: true });
-  await d.getByLabel('Agreement', { exact: true }).selectOption(a.agreement.id);
+  await d.getByLabel('Room / unit', { exact: true }).selectOption(a.room.id);
+  await d.getByLabel('Tenant', { exact: true }).selectOption(a.tenant.id);
   await d.getByLabel('Payment method', { exact: true }).selectOption('cash');
   await expect(due.locator('option')).toHaveCount(2);
   await expect(due.locator('option[value="' + a.due.id + '"]')).toHaveCount(1);
   await expect(due.locator('option[value="' + b.due.id + '"]')).toHaveCount(0);
   await due.selectOption(a.due.id);
   await d.getByLabel('Amount', { exact: true }).fill('25.00');
-  await d.getByLabel('Agreement', { exact: true }).selectOption(b.agreement.id);
-  await expect(due).toHaveValue('');
+  await d.getByLabel('Room / unit', { exact: true }).selectOption(b.room.id);
+  await d.getByLabel('Tenant', { exact: true }).selectOption(b.tenant.id);
+  await expect(due).toHaveValue(b.due.id);
+  await expect(due.locator('option[value="' + a.due.id + '"]')).toHaveCount(0);
   await expect(due).toHaveAttribute('required', '');
   await expect(due.locator('option[value="' + b.due.id + '"]')).toHaveCount(1);
   await expect(d.getByLabel('Amount', { exact: true })).toHaveValue('25.00');
@@ -255,6 +262,7 @@ test('collection choices follow the selected agreement and keep deposits, advanc
   await expect(due).toBeHidden(); await expect(due).toBeDisabled();
   await expect(d.locator('#rental-payment-note')).toContainText('stays pending');
   await d.getByLabel('Payment method', { exact: true }).selectOption('bank');
+  await d.getByLabel('Receiving account or collector', { exact: true }).selectOption(bank.id);
   await expect(due).toBeVisible(); await due.selectOption(b.due.id);
   await d.getByLabel('Received date', { exact: true }).fill('2026-10-20');
   await d.getByLabel('Reference (optional)', { exact: true }).fill('SYNTHETIC-USABILITY-PARTIAL');
@@ -269,5 +277,9 @@ test('collection choices follow the selected agreement and keep deposits, advanc
   await page.getByLabel('Occupancy / balance date', { exact: true }).fill('2026-10-20');
   await page.getByRole('button', { name: 'Apply rental filters', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Collection register', exact: true })).toContainText('SYNTHETIC-USABILITY-PARTIAL');
+  await server.fixture.login();
+  const funds=await server.fixture.request('GET','/api/hamdee/v1/company-finance?month=2026-10&asOf=2026-10-20');
+  expect(funds.status).toBe(200);
+  expect((await funds.json()).data.totals.find((row:{accountId:string})=>row.accountId===bank.id)).toMatchObject({receipts:'25',balance:'25'});
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
 });

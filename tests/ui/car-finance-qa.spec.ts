@@ -19,11 +19,21 @@ async function login(page: Page) {
   await page.getByLabel('Password', { exact: true }).fill(server.fixture.inputs.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Business Overview', exact: true, level: 1 })).toBeVisible();
+  await expect(page.locator('#main')).toHaveAttribute('aria-busy', 'false');
 }
 async function nav(page: Page, label: string) {
   const menu = page.getByRole('button', { name: 'Open navigation', exact: true });
   if (await menu.isVisible() && await menu.getAttribute('aria-expanded') !== 'true') await menu.click();
   await page.locator('#navigation').getByRole('link', { name: label, exact: true }).click();
+  await expect(page.getByRole('heading', { name: label, exact: true, level:1 })).toBeVisible();
+  await expect(page.locator('#operations-workspace')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('#main')).toHaveAttribute('aria-busy', 'false');
+  if(label==='Company Finance'||label==='Personal Finance'){
+    await page.getByLabel('Statement month',{exact:true}).fill('2026-10');
+    await page.getByLabel('Balance cutoff',{exact:true}).fill('2026-10-31');
+    await page.getByRole('button',{name:'Apply ledger filters',exact:true}).click();
+    await expect(page.locator('#operations-workspace')).toHaveAttribute('aria-busy','false');
+  }
 }
 async function command(module: string, body: unknown) {
   const response = await server.fixture.request('POST', api + '/' + module + '/commands', body, { 'Idempotency-Key': randomUUID() });
@@ -58,13 +68,14 @@ async function opening(page: Page, name: string) {
 }
 
 test('Independent full workspace: enabled car route reads real records, partial bank/cheque collections and one maintenance save persist', async ({ page }, info) => {
-  await start(); const seeded = await seed(); await login(page); await nav(page, 'Car Rentals');
+  await start(); const seeded = await seed(),bank=await command('company-finance',{action:'create-account',name:'Synthetic connected car bank',scope:'company',kind:'bank',currency:'QAR',openingDate:'2026-10-01',openingAmount:'0',ownerConfirmedOpening:true}); await login(page); await nav(page, 'Car Rentals');
   await expect(page.getByRole('region', { name: 'Vehicle register', exact: true })).toContainText('SYNTHETIC-INDEPENDENT-CAR');
   for (const [amount, method] of [['20', 'bank'], ['10', 'cheque']]) {
     await page.getByRole('button', { name: 'Record collection', exact: true }).click();
     const dialog = page.getByRole('dialog'); await dialog.getByLabel('Rental term', { exact: true }).selectOption(seeded.agreement.id);
     await dialog.getByLabel('Receipt date', { exact: true }).fill('2026-10-10');
     await dialog.getByLabel('Collected amount', { exact: true }).fill(amount); await dialog.getByLabel('Payment method', { exact: true }).selectOption(method);
+    if(method!=='cheque')await dialog.getByLabel('Receiving account or collector',{exact:true}).selectOption(bank.id);
     await save(page);
   }
   await page.getByRole('button', { name: 'Record maintenance cost', exact: true }).click();
@@ -77,7 +88,7 @@ test('Independent full workspace: enabled car route reads real records, partial 
   const cars = await state(page, 'car-rentals'); expect(cars.collections).toHaveLength(3); expect(cars.expenses).toHaveLength(1);
   expect(cars.balances[0]).toMatchObject({ agreedAmount: '100', collectedAmount: '50', outstandingAmount: '50', pendingChequeAmount: '10' });
   expect(cars.summary[0]).toMatchObject({ cashCollected: '50', recordedCosts: '12.5', recordedComparison: '37.5' });
-  expect((await state(page, 'company-finance')).accounts).toHaveLength(0);
+  const money=await state(page,'company-finance');expect(money.accounts).toHaveLength(1);expect(money.totals[0]).toMatchObject({receipts:'20',balance:'20'});
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.screenshot({ path: `evidence/car-finance-qa/screenshots/${info.project.name}-actual-car-workspace.png`, fullPage: true });
 });
@@ -142,7 +153,7 @@ test('Independent full workspace: without007 Staff and finance remain live while
 });
 
 test('Independent full workspace: completed car write delayed across route reset and logout cannot resurrect protected UI', async ({ page }) => {
-  await start(); await seed(); await login(page); await nav(page, 'Car Rentals');
+  await start(); await seed();const bank=await command('company-finance',{action:'create-account',name:'Synthetic delayed car bank',scope:'company',kind:'bank',currency:'QAR',openingDate:'2026-10-01',openingAmount:'0',ownerConfirmedOpening:true}); await login(page); await nav(page, 'Car Rentals');
   let release!: () => void, entered!: () => void, delivered!: () => void;
   const hold = new Promise<void>(resolve => { release = resolve; }), ready = new Promise<void>(resolve => { entered = resolve; }), done = new Promise<void>(resolve => { delivered = resolve; });
   let held = false, heldStatus = 0;
@@ -156,6 +167,7 @@ test('Independent full workspace: completed car write delayed across route reset
     await page.getByRole('dialog').getByLabel('Receipt date', { exact: true }).fill('2026-10-10');
     await page.getByRole('dialog').getByLabel('Collected amount', { exact: true }).fill('20');
     await page.getByRole('dialog').getByLabel('Payment method', { exact: true }).selectOption('bank');
+    await page.getByRole('dialog').getByLabel('Receiving account or collector',{exact:true}).selectOption(bank.id);
     await page.getByRole('dialog').getByRole('button', { name: 'Save record', exact: true }).click(); await ready; expect(heldStatus).toBe(200);
     await page.goto(server.url + '/workspace/index.html#dashboard');
     await expect(page.getByRole('dialog')).not.toBeVisible();

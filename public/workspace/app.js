@@ -2,6 +2,7 @@ import { PropertyApi } from './adapter.js';
 import { renderRental,resetRental,rentalReportPeriod,rentalSectionLinks,isIsolatedDemoContext } from './rental.js';
 import { renderDailyDashboard,resetDailyDashboard } from './daily-dashboard.js';
 import { renderExpenses,resetExpenses,expenseReportPeriod } from './expenses.js';
+import { resetContinuation } from './continuation.js';
 const api=new PropertyApi(),$=s=>document.querySelector(s),icon=window.icon;
 const isolatedDemo=isIsolatedDemoContext(window.location.hostname,$('meta[name="hamdee-demo"]')?.content);
 if(isolatedDemo){$('#isolated-demo-notice').hidden=false;document.querySelector('.sidebar-bottom .demo-indicator').textContent='DEMO · Isolated local records';document.querySelector('.sidebar-bottom p').textContent='Synthetic examples only. No real client data.';document.querySelector('.workspace-footer span:last-child').textContent='DEMO · Never verified business balances';}
@@ -9,11 +10,11 @@ const e=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt
 let session=null,current=null,formContext=null,pending=null,trigger=null,routeSequence=0,authGeneration=0;
 let filters={archiveState:'active',q:'',limit:'50',cursor:''},page=null;
 let managed=null,access=null,recoveryView=false,readController=null,writeController=null,authController=null,expiryTimer=null;
-let staffWorkspace=null,staffReady=false,capabilityController=null;
+let staffWorkspace=null,staffReady=false,customerReady=false,capabilityController=null;
 let carReady=false,companyReady=false,personalReady=false,carWorkspace=null,companyWorkspace=null,personalWorkspace=null;
 let partnerReady=false,partnerWorkspace=null,documentWorkspace=null,customerWorkspace=null;
 let moduleStates={};
-function resetOwnerOperations(){resetDailyDashboard();carWorkspace?.resetCarRentals();companyWorkspace?.resetCompanyFinance();personalWorkspace?.resetPersonalFinance();partnerWorkspace?.resetPartners();documentWorkspace?.resetDocuments();customerWorkspace?.resetCustomers();}
+function resetOwnerOperations(){resetContinuation();resetDailyDashboard();carWorkspace?.resetCarRentals();companyWorkspace?.resetCompanyFinance();personalWorkspace?.resetPersonalFinance();partnerWorkspace?.resetPartners();documentWorkspace?.resetDocuments();customerWorkspace?.resetCustomers();}
 // Retain HAMDEE's paper panels, brass actions, Inter and compact 4px rhythm.
 // Owner access has one primary action; property metadata keeps its existing hierarchy.
 const can=action=>session?.capabilities.includes(action);
@@ -29,7 +30,7 @@ const expenseSections=['expenses','landlord','utilities','maintenance'];
 const settledRead=request=>request.then(value=>({ok:true,value}),error=>({ok:false,error}));
 function closeNavigation(returnFocus=false){$('#sidebar').classList.remove('open');$('.workspace').inert=false;document.body.classList.remove('navigation-open');$('.mobile-menu').setAttribute('aria-expanded','false');if(returnFocus)$('.mobile-menu').focus();}
 function invalidateForm(){writeController?.abort();writeController=null;formContext=null;pending=null;$('#dialog').close();$('#dialog-body').innerHTML='';$('#conflict-review').innerHTML='';$('#form-error').textContent='';$('#save-button').disabled=false;$('#property-form').removeAttribute('aria-busy');}
-function clearProtected(){closeNavigation();resetOwnerOperations();carReady=false;companyReady=false;personalReady=false;partnerReady=false;staffReady=false;moduleStates={};capabilityController?.abort();capabilityController=null;staffWorkspace?.resetStaffCollections();resetExpenses();resetRental();authGeneration++;routeSequence++;readController?.abort();authController?.abort();window.clearTimeout(expiryTimer);session=null;current=null;page=null;access=null;api.csrfToken=null;invalidateForm();$('#user-context').textContent='Not signed in';$('#logout-button').hidden=true;$('#recovery-button').hidden=true;document.querySelectorAll('#recovery-button,.topbar [data-action="refresh"]').forEach(button=>button.disabled=false);$('#feedback').textContent='';$('#mode-detail').textContent='Sign in to access saved records';}
+function clearProtected(){closeNavigation();resetOwnerOperations();carReady=false;companyReady=false;personalReady=false;partnerReady=false;staffReady=false;customerReady=false;moduleStates={};capabilityController?.abort();capabilityController=null;staffWorkspace?.resetStaffCollections();resetExpenses();resetRental();authGeneration++;routeSequence++;readController?.abort();authController?.abort();window.clearTimeout(expiryTimer);session=null;current=null;page=null;access=null;api.csrfToken=null;invalidateForm();$('#user-context').textContent='Not signed in';$('#logout-button').hidden=true;$('#recovery-button').hidden=true;document.querySelectorAll('#recovery-button,.topbar [data-action="refresh"]').forEach(button=>button.disabled=false);$('#feedback').textContent='';$('#mode-detail').textContent='Sign in to access saved records';}
 function beginRead(){readController?.abort();readController=new window.AbortController();routeSequence++;return readController;}
 const validRead=(seq,controller)=>seq===routeSequence&&!controller.signal.aborted;
 const accessLost=error=>error.status===401||error.code==='OWNER_ACCESS_DENIED';
@@ -167,7 +168,7 @@ async function refreshProof(){
 function navigation(){
   const route=(window.location.hash.slice(1)||'dashboard').split('/')[0],active=['tenants','collections','cheques'].includes(route)?'properties':route==='maintenance'?'expenses':route;
   const focused=$('#navigation').contains(document.activeElement)?document.activeElement.closest('a')?.getAttribute('href'):null;
-  const enabled=new Set(['dashboard','properties',...(managed!==false?['customers','expenses','reports']:[]),...(staffReady?['staff-collections']:[]),...(carReady?['car-rentals']:[]),...(companyReady?['company']:[]),...(personalReady?['personal-finance']:[]),...(partnerReady?['partners']:[])]);
+  const enabled=new Set(['dashboard','properties',...(managed!==false?['expenses','reports']:[]),...(customerReady?['customers']:[]),...(staffReady?['staff-collections']:[]),...(carReady?['car-rentals']:[]),...(companyReady?['company']:[]),...(personalReady?['personal-finance']:[]),...(partnerReady?['partners']:[])]);
   $('#navigation').innerHTML='<div class="nav-group">WORKSPACE</div>'+nav.map(([id,name,ico])=>enabled.has(id)?`<a class="nav-link ${active===id?'active':''}" href="#${id}" ${active===id?'aria-current="page"':''}>${icon(ico)}<span>${e(name)}</span></a>`:moduleStates[id]==='retry'?`<button type="button" class="nav-link nav-unavailable nav-retry" data-action="retry-modules" title="Retry checking this service">${icon(ico)}<span>${e(name)}</span><small>Retry</small></button>`:`<button type="button" class="nav-link nav-unavailable" disabled>${icon(ico)}<span>${e(name)}</span><small>${moduleStates[id]==='loading'?'Checking…':'Unavailable'}</small></button>`).join('');
   $('#crumb').textContent=nav.find(n=>n[0]===active)?.[1]||'Property workspace';
   if(focused)[...$('#navigation').querySelectorAll('a')].find(link=>link.getAttribute('href')===focused)?.focus();
@@ -178,11 +179,11 @@ async function discoverOperations(){
   const arrays=(data,keys)=>data?.moneyUnit==='decimal-major-unit-strings'&&keys.every(key=>Array.isArray(data[key]));
   const scoped=(data,scope)=>arrays(data,['accounts','transferAccounts','totals','entries','monthEntries'])&&data.scope===scope&&data.accounts.every(row=>row.scope===scope);
   const outcomes={};
-  const tasks=[['staff-collections',()=>api.staffRead({month,asOf},controller.signal),data=>arrays(data,['collectors','collections','handovers','totals','daily','history'])],['company',()=>api.financeRead({month,asOf},controller.signal),data=>scoped(data,'company')],['personal-finance',()=>api.personalRead({month,asOf},controller.signal),data=>scoped(data,'personal')],['car-rentals',()=>api.carRead({month,asOf},controller.signal),data=>arrays(data,['vehicles','agreements','availability','balances','collections','expenses','history','summary'])],['partners',()=>api.partnerRead({month,asOf,limit:1},controller.signal),data=>arrays(data,['partners','links','entries','history','summary','currencies'])]];
+  const tasks=[['customers',()=>api.customerRead({asOf},controller.signal),data=>Array.isArray(data?.customers)&&data.asOf===asOf],['staff-collections',()=>api.staffRead({month,asOf},controller.signal),data=>arrays(data,['collectors','collections','handovers','totals','daily','history'])],['company',()=>api.financeRead({month,asOf},controller.signal),data=>scoped(data,'company')],['personal-finance',()=>api.personalRead({month,asOf},controller.signal),data=>scoped(data,'personal')],['car-rentals',()=>api.carRead({month,asOf},controller.signal),data=>arrays(data,['vehicles','agreements','availability','balances','collections','expenses','history','summary'])],['partners',()=>api.partnerRead({month,asOf,limit:1},controller.signal),data=>arrays(data,['partners','links','entries','history','summary','currencies'])]];
   for(const [id] of tasks){outcomes[id]={state:'loading',data:null};moduleStates[id]='loading';}navigation();
   const update=()=>{
     if(!valid())return;
-    companyReady=outcomes.company.state==='ready';personalReady=outcomes['personal-finance'].state==='ready';carReady=outcomes['car-rentals'].state==='ready';partnerReady=outcomes.partners.state==='ready';
+    customerReady=outcomes.customers.state==='ready';companyReady=outcomes.company.state==='ready';personalReady=outcomes['personal-finance'].state==='ready';carReady=outcomes['car-rentals'].state==='ready';partnerReady=outcomes.partners.state==='ready';
     // Staff records have their own authorized service. Company account choices
     // are verified separately by the handover form; a slow finance probe must
     // not hide otherwise available collector records and custody history.

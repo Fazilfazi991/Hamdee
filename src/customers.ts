@@ -1,3 +1,4 @@
+import {effectiveLedgerSql} from './effective-ledgers';
 import {createHash,randomUUID} from 'node:crypto';
 import type {Identity} from './auth';
 import type {Sql} from './database';
@@ -34,6 +35,7 @@ export class CustomerService {
  async overview(identity:Identity,query:{asOf:string;q?:string}){
  const asOf=date(query.asOf),q=optional(query.q,200).toLowerCase();
  return this.properties.ownerContext(identity,async sql=>{
+      sql=await effectiveLedgerSql(sql);
  const ready=(await sql.query<{ready:boolean}>("SELECT to_regclass('hamdee_private.customer_kyc') IS NOT NULL AS ready")).rows[0]?.ready;
  check(ready,'Customers migration is not available in this environment.','CONFIGURATION_UNAVAILABLE',503);
  const tenants=(await sql.query<Row>('SELECT * FROM hamdee_private.tenants ORDER BY name,id')).rows;
@@ -102,10 +104,14 @@ export class CustomerService {
  const customerId=id(customer),asOf=date(query.asOf),from=query.from?date(query.from):'1900-01-01';check(from<=asOf,'Choose an ordered statement period.');
  const currency=query.currency?text(query.currency,3):null;check(!currency||/^[A-Z]{3}$/.test(currency),'Choose an explicit currency.');
  return this.properties.ownerContext(identity,async sql=>{
+      sql=await effectiveLedgerSql(sql);
  const tenant=(await sql.query<Row>('SELECT * FROM hamdee_private.tenants WHERE id=$1',[customerId])).rows[0];check(tenant,'Customer not found.','NOT_FOUND',404);
  const properties=(await sql.query<Row>(`SELECT a.*,p.name AS property_name,r.code AS room_code FROM hamdee_private.rental_agreements a JOIN hamdee_private.properties p ON p.id=a.property_id JOIN hamdee_private.rooms r ON r.id=a.room_id WHERE a.tenant_id=$1 ORDER BY a.start_date`,[customerId])).rows;
  const occupancyReady=(await sql.query<{ready:boolean}>("SELECT to_regclass('hamdee_private.room_occupancy_confirmations') IS NOT NULL AS ready")).rows[0]?.ready;
  const occupancyHistory=occupancyReady?(await sql.query<Row>(`SELECT o.*,r.code AS room_code,p.name AS property_name FROM hamdee_private.room_occupancy_confirmations o JOIN hamdee_private.rooms r ON r.id=o.room_id JOIN hamdee_private.properties p ON p.id=r.property_id WHERE o.tenant_id=$1 ORDER BY o.effective_date,o.version`,[customerId])).rows.map(view):[];
+ const propertyDocumentsReady=(await sql.query<{ready:boolean}>("SELECT to_regclass('hamdee_private.property_documents') IS NOT NULL AS ready")).rows[0]?.ready;
+ const customerRoomIds=[...new Set([...properties.map(p=>p.room_id),...occupancyHistory.map(p=>p.roomId)].filter(Boolean))],customerPropertyIds=[...new Set([...properties.map(p=>p.property_id),...occupancyHistory.map(p=>p.propertyId)].filter(Boolean))];
+ const propertyDocuments=propertyDocumentsReady?(await sql.query<Row>(`SELECT id,property_id,room_id,name,mime_type,octet_length(content) AS size,created_at FROM hamdee_private.property_documents WHERE room_id=ANY($1::uuid[]) OR (room_id IS NULL AND property_id=ANY($2::uuid[])) ORDER BY created_at,id`,[customerRoomIds,customerPropertyIds])).rows.map(view):[];
  const agreements=properties.map(a=>a.id);
  const allDues=(await sql.query<Row>(`SELECT d.*,coalesce(a.paid,0)::text AS paid_minor,(d.amount_minor-coalesce(a.paid,0))::text AS outstanding_minor FROM hamdee_private.rent_dues d LEFT JOIN LATERAL(SELECT sum(amount_minor) paid FROM hamdee_private.rent_allocations WHERE due_id=d.id AND allocated_date<=$2::date)a ON true WHERE d.agreement_id=ANY($1::uuid[]) AND d.due_date<=$2::date ORDER BY d.due_date,d.id`,[agreements,asOf])).rows;
  const collections=(await sql.query<Row>('SELECT * FROM hamdee_private.rent_collections WHERE agreement_id=ANY($1::uuid[]) AND received_date BETWEEN $2::date AND $3::date AND ($4::text IS NULL OR currency=$4) ORDER BY received_date,id',[agreements,from,asOf,currency])).rows;
@@ -134,18 +140,24 @@ export class CustomerService {
  UNION SELECT event_id FROM hamdee_private.car_expenses WHERE agreement_id=ANY($1::uuid[])) ORDER BY e.occurred_at,e.id`,[carIds])).rows.map(view);
  const moneyHistory=(await sql.query<Row>(`SELECT DISTINCT e.* FROM hamdee_private.ops_events e JOIN hamdee_private.ops_money m ON m.event_id=e.id JOIN hamdee_private.ops_claims c ON c.id=m.claim_id
  WHERE c.snapshot->>'agreementId'=ANY($1::text[]) ORDER BY e.occurred_at,e.id`,[[...agreements,...carIds].map(String)])).rows.map(view);
+ const correctionsReady=(await sql.query<{ready:boolean}>("SELECT to_regclass('hamdee_private.financial_corrections') IS NOT NULL AS ready")).rows[0]?.ready;
+ const correctionHistory=correctionsReady?(await sql.query<Row>(`SELECT e.*,c.reason FROM hamdee_private.financial_corrections c JOIN hamdee_private.ops_events e ON e.id=c.event_id WHERE
+ (c.source_kind='rental-refund' AND EXISTS(SELECT 1 FROM hamdee_private.rent_collections r JOIN hamdee_private.rental_agreements a ON a.id=r.agreement_id WHERE r.id=c.source_id AND a.tenant_id=$1)) OR
+ (c.source_kind='security-refund' AND EXISTS(SELECT 1 FROM hamdee_private.security_deposit_refunds r JOIN hamdee_private.security_cheques q ON q.id=r.cheque_id WHERE r.id=c.source_id AND q.customer_id=$1)) ORDER BY e.occurred_at,e.id`,[customerId])).rows.map(view):[];
  const depositRefunds=(await sql.query<Row>(`SELECT r.*,c.currency FROM hamdee_private.security_deposit_refunds r JOIN hamdee_private.security_cheques c ON c.id=r.cheque_id WHERE c.customer_id=$1 AND r.business_date BETWEEN $2::date AND $3::date AND ($4::text IS NULL OR c.currency=$4) ORDER BY r.business_date,r.id`,[customerId,from,asOf,currency])).rows.map(view);
  const rentalHistory=(await sql.query<Row>(`SELECT * FROM hamdee_private.rental_events WHERE entity_id=$1 OR entity_id=ANY($2::uuid[]) OR entity_id=ANY($3::uuid[]) ORDER BY occurred_at,id`,[customerId,agreements,[...allDues,...collections,...allocations].map(r=>r.id)])).rows.map(view);
- return {depositRefunds,occupancyHistory,carStatement,carStatementBalances,carStatementBasis: 'Explicit total agreed car amounts dated at rental start minus actual recorded receipts; decimal major units, without proration.',statement,statementBalances,statementBasis:'Issued property dues minus actual recorded rent and advances; deposits and pending cheques excluded. Receipt date and rental period are separate.',customer:{...view(tenant),balances:await this.balances(sql,customerId,asOf)},properties:properties.map(view),carRentals:cars.map(c=>({...view(c),collections:carReceipts.filter(r=>r.agreement_id===c.id).map(view),expenses:carCosts.filter(r=>r.agreement_id===c.id).map(view)})),dues:allDues.filter(d=>day(d.due_date)>=from&&(!currency||d.currency===currency)).map(view),collections:collections.map(view),allocations:allocations.map(view),cheques:(await this.cheques(sql,customerId,asOf)).filter(c=>!currency||c.currency===currency),kyc:safeKyc(k,asOf,documents),history:[...new Map([...history,...rentalHistory,...carHistory,...moneyHistory].map(event=>[event.id,event])).values()].sort((a,b)=>String(a.occurredAt).localeCompare(String(b.occurredAt))||String(a.id).localeCompare(String(b.id))),asOf,from,currency};
+ return {depositRefunds,occupancyHistory,propertyDocuments,carStatement,carStatementBalances,carStatementBasis: 'Explicit total agreed car amounts dated at rental start minus actual recorded receipts; decimal major units, without proration.',statement,statementBalances,statementBasis:'Issued property dues minus actual recorded rent and advances; deposits and pending cheques excluded. Receipt date and rental period are separate.',customer:{...view(tenant),balances:await this.balances(sql,customerId,asOf)},properties:properties.map(view),carRentals:cars.map(c=>({...view(c),collections:carReceipts.filter(r=>r.agreement_id===c.id).map(view),expenses:carCosts.filter(r=>r.agreement_id===c.id).map(view)})),dues:allDues.filter(d=>day(d.due_date)>=from&&(!currency||d.currency===currency)).map(view),collections:collections.map(view),allocations:allocations.map(view),cheques:(await this.cheques(sql,customerId,asOf)).filter(c=>!currency||c.currency===currency),kyc:safeKyc(k,asOf,documents),history:[...new Map([...history,...rentalHistory,...carHistory,...moneyHistory,...correctionHistory].map(event=>[event.id,event])).values()].sort((a,b)=>String(a.occurredAt).localeCompare(String(b.occurredAt))||String(a.id).localeCompare(String(b.id))),asOf,from,currency};
  });
  }
  async getDocument(identity:Identity,value:unknown){return this.properties.ownerContext(identity,async sql=>{
+      sql=await effectiveLedgerSql(sql);
  const r=(await sql.query<Row>('SELECT * FROM hamdee_private.customer_documents WHERE id=$1',[id(value)])).rows[0];check(r,'Document not found.','NOT_FOUND',404);check(r.content instanceof Uint8Array&&r.content.length<=DOCUMENT_MAX_BYTES&&digest(r.content)===r.content_sha256,'Document is unavailable.','DOCUMENT_UNAVAILABLE',503);return {name:String(r.name),mimeType:String(r.mime_type),content:Buffer.from(r.content as Uint8Array)};
  });}
  async mutate(identity:Identity,input:unknown,key:string,requestId:string){
  id(key);const b=allowFields(input,{'create-customer':['name','phone','email','notes','kyc','documents'],'update-kyc':['customerId','expectedVersion','kyc','reason'],'review-kyc':['customerId','expectedVersion','status','reason'],'upload-kyc':['customerId','name','mimeType','base64','side'],'link-car':['customerId','agreementId','reason'],'reveal-identity':['customerId'],'record-security-cheque':['customerId','agreementId','carAgreementId','chequeNumber','bank','drawerName','chequeDate','receivedDate','amount','currency','notes','replacesId','image'],'transition-cheque':['chequeId','expectedVersion','status','businessDate','reason','accountId'],'reverse-cleared-cheque':['chequeId','expectedVersion','businessDate','reason'],'refund-security-deposit':['chequeId','expectedVersion','businessDate','amount','accountId','reason']});
  const hash=digest(canonical(b));
  return this.properties.ownerContext(identity,async(sql,actorId)=>{
+      sql=await effectiveLedgerSql(sql);
  await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['hamdee-operations-money']);
  const saved=(await sql.query<{digest:string;result:Row}>('SELECT digest,result FROM hamdee_private.customer_commands WHERE actor_id=$1 AND key=$2',[actorId,key])).rows[0];
  if(saved){check(saved.digest===hash,'Use a new operation key for changed data.','IDEMPOTENCY_KEY_REUSED',409);if(b.action!=='reveal-identity')return {...saved.result,replay:true};}
@@ -215,7 +227,14 @@ export class CustomerService {
  check(b.expectedVersion===state.version,'Cheque history changed. Reload before saving.','VERSION_CONFLICT',412);
  check(state.status==='cleared','Only a confirmed cleared cheque can have its bank posting reversed.','INVALID_CHEQUE_TRANSITION',409);
  check(reason,'Record the confirmed bank reversal reason.');const when=date(b.businessDate);check(when>=day(state.business_date),'Reversal cannot precede clearance.');
- check(!(await sql.query('SELECT id FROM hamdee_private.security_deposit_refunds WHERE cheque_id=$1',[cheque!.id])).rows.length,'A refunded deposit requires a separately reviewed correction.','DEPOSIT_EXCEEDED',409);
+ check(!(await sql.query('SELECT cheque_id FROM hamdee_private.security_deposit_refunds WHERE cheque_id=$1 GROUP BY cheque_id HAVING sum(amount_minor)>0',[cheque!.id])).rows.length,'Correct the funded refunds before reversing clearance.','DEPOSIT_EXCEEDED',409);
+ if(!cheque!.agreement_id){
+  const refunds=(await sql.query<Row>('SELECT business_date,amount_minor FROM hamdee_private.security_deposit_refunds WHERE cheque_id=$1',[cheque!.id])).rows;
+  const days=new Map<string,bigint>([[day(state.business_date),BigInt(String(cheque!.amount_minor))]]);
+  for(const r of refunds){const d=day(r.business_date);days.set(d,(days.get(d)??0n)-BigInt(String(r.amount_minor)));}
+  days.set(when,(days.get(when)??0n)-BigInt(String(cheque!.amount_minor)));let held=0n;
+  for(const [,delta] of [...days].sort(([a],[b])=>a.localeCompare(b))){held+=delta;check(held>=0n,'This reversal would invalidate a dated funded refund.','DEPOSIT_EXCEEDED',409);}
+ }
  const opsId=randomUUID();await reverseMoney(sql,opsId,state.money_entry_id,when,reason);
  const reversal=(await sql.query<Row>('SELECT id FROM hamdee_private.ops_money WHERE reversal_of=$1',[state.money_entry_id])).rows[0];
  if(cheque!.agreement_id){

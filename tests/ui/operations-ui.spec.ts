@@ -27,7 +27,7 @@ async function navigate(page:Page,name:string){
 }
 test('operations shells preserve owner access and never fabricate unconnected balances',async({page},info)=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));await login(page);
-  await expect(page.locator('#navigation button')).toHaveCount(5);
+  await expect(page.locator('#navigation button')).toHaveCount(6);
   for(const entry of await page.locator('#navigation button').all()){
     await expect(entry).toContainText(/Unavailable|Checking…|Retry/);
     expect(await entry.getAttribute('href')).toBeNull();
@@ -35,6 +35,7 @@ test('operations shells preserve owner access and never fabricate unconnected ba
     else await expect(entry).toBeDisabled();
   }
   await expect(page.getByRole('link',{name:'Staff Collections',exact:true})).toHaveCount(0);
+  await expect(page.getByRole('link',{name:'Customers & Tenants',exact:true})).toHaveCount(0);
   await page.goto(server.url+'/workspace/index.html#staff-collections');
   await expect(page.getByRole('heading',{name:'Staff Collections unavailable',exact:true})).toBeVisible();
   await expect(page.locator('#main')).toContainText('do not provide sign-in access');
@@ -178,7 +179,7 @@ test('company account setup has no default opening balance and requires owner co
   const fixture=await staffContract(page);await login(page);await navigate(page,'Staff Collections');await page.getByRole('button',{name:'Add company account',exact:true}).click();
   await expect(page.getByLabel('Owner-confirmed opening balance',{exact:true})).toHaveValue('');await expect(page.getByLabel('Opening balance date',{exact:true})).toHaveValue('');
   await page.getByLabel('Account name',{exact:true}).fill('Synthetic confirmed bank');await page.getByLabel('Account type',{exact:true}).selectOption('bank');
-  await expect(page.locator('dialog[open] input[name="currency"]')).toHaveValue('QAR');await page.getByLabel('Opening balance date',{exact:true}).fill(fixture.day);await page.getByLabel('Owner-confirmed opening balance',{exact:true}).fill('0');
+  await page.getByLabel('Currency',{exact:true}).fill('QAR');await page.getByLabel('Opening balance date',{exact:true}).fill(fixture.day);await page.getByLabel('Owner-confirmed opening balance',{exact:true}).fill('0');
   await page.getByLabel('I confirm this account’s opening amount and date, including an explicit zero if appropriate.',{exact:true}).check();
   await page.getByRole('button',{name:'Save record',exact:true}).click();await expect(page.getByRole('dialog')).not.toBeVisible();
   expect(fixture.commands[0].body).toEqual({action:'create-account',scope:'company',name:'Synthetic confirmed bank',kind:'bank',currency:'QAR',openingDate:fixture.day,openingAmount:'0',ownerConfirmedOpening:true,notes:''});

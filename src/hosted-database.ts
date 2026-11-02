@@ -1,7 +1,7 @@
 import { Pool, type PoolConfig } from 'pg';
 import { X509Certificate } from 'node:crypto';
 import { checkServerIdentity } from 'node:tls';
-import { type Database, type Sql, runTransaction } from './database';
+import { type Database, type Sql, runTransaction,calendarDateTypes } from './database';
 import { ApiError, requireThat } from './errors';
 import { logSafely, securityLogger, type SecurityLogger } from './security-log';
 
@@ -56,7 +56,7 @@ export function hostedConnectionOptions(connectionUrl:string,pins:HostedDatabase
     return {host:pins.host,port:pins.port,database:pins.database,user:pins.user,password,
       ssl:{rejectUnauthorized:true,minVersion:'TLSv1.2',servername:pins.host,checkServerIdentity,...(ca?{ca}:{})},
       max:2,connectionTimeoutMillis:3000,idleTimeoutMillis:10000,allowExitOnIdle:true,
-      application_name:'hamdee-synthetic-development'};
+      types:calendarDateTypes(),application_name:'hamdee-synthetic-development'};
   }catch{reportConfigurationFailure(stage);return denied() as never;}
 }
 

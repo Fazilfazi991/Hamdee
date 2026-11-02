@@ -1,8 +1,13 @@
-import { Pool, type PoolClient } from 'pg';
+import { Pool, TypeOverrides, type PoolClient } from 'pg';
 import { requireThat } from './errors';
 import { securityLogger, logSafely, type SecurityLogger } from './security-log';
 export interface Sql { query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }> }
 export interface Database { transaction<T>(work: (sql: Sql) => Promise<T>): Promise<T> }
+
+// PostgreSQL DATE is a calendar label, not a local-midnight instant. Keep the
+// parser scoped to HAMDEE pools: converting local midnight to UTC can otherwise
+// move receipts, expenses and cheque clearances to the previous business day.
+export function calendarDateTypes(){const parsers=new TypeOverrides();parsers.setTypeParser(1082,'text',(value:string)=>value);return parsers;}
 
 export function localConnectionOptions(connectionUrl:string) {
   let url:URL;try{url=new URL(connectionUrl);}catch{throw new Error('A dedicated local HAMDEE database is required.');}
@@ -12,7 +17,7 @@ export function localConnectionOptions(connectionUrl:string) {
   // Explicit fields prevent query-string overrides, PG* defaults and pgpass lookup.
   return {host:url.hostname.replace(/^\[|\]$/g,''),port:Number(url.port),database:url.pathname.slice(1),
     user:decodeURIComponent(url.username),password:decodeURIComponent(url.password),ssl:false,
-    options:'-c search_path=pg_catalog',client_encoding:'UTF8',max:4,connectionTimeoutMillis:3000,
+    options:'-c search_path=pg_catalog',client_encoding:'UTF8',types:calendarDateTypes(),max:4,connectionTimeoutMillis:3000,
     statement_timeout:10000,idle_in_transaction_session_timeout:10000,application_name:'hamdee-property-foundation'};
 }
 

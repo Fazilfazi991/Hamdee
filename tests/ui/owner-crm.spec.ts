@@ -118,6 +118,9 @@ test('owner UI: rejected expense CSRF retains the draft for an explicit retry', 
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: 'Save expense record', exact: true }).click();
   await expect(dialog).not.toBeVisible();
+  await page.getByLabel('Expense month', { exact: true }).fill('2026-10');
+  await page.getByLabel('Report through', { exact: true }).fill('2026-10-15');
+  await page.getByRole('button', { name: 'Apply expense filters', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Property expense register', exact: true }).getByRole('row').filter({ hasText: 'Synthetic retained CSRF vendor' })).toHaveCount(1);
   await navigate(page, 'Dashboard');
   await expect(page.getByRole('heading', { name: 'Business Overview', exact: true })).toBeVisible();

@@ -44,7 +44,7 @@ function connect() {
 }
 async function disconnect() { await Promise.all([pool?.end(), db1?.close(), db2?.close()]); }
 before(async () => {
-  const tools = path.resolve('../hamdee-production-foundation/hamdee-foundation/.test-tools');
+  const tools = path.resolve(process.env.HAMDEE_NATIVE_RUNTIME_ROOT||'.test-tools');
   const runtime = await inspectOwnerPortableRuntime(path.join(tools, 'postgresql-17.11-5-windows-x64-binaries.zip'), path.join(tools, 'postgresql-17.11-5'));
   cluster = await startOwnerNativeCluster(runtime); connect();
   await pool.query(await up(['006_local_operations_records.up.sql', '007_local_car_rentals.up.sql'])); await seedOwnerAppRecords(pool);

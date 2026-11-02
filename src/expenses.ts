@@ -1,3 +1,4 @@
+import {effectiveLedgerSql} from './effective-ledgers';
 import { createHash,randomUUID } from 'node:crypto';
 import type { Identity } from './auth';
 import { PropertyService } from './service';
@@ -14,6 +15,7 @@ export class ExpenseService {
   async overview(identity:Identity,query:{month:string;asOf:string;propertyId?:string}){
     const period=month(query.month),asOf=date(query.asOf),propertyId=query.propertyId?id(query.propertyId):null;
     return this.properties.ownerContext(identity,async sql=>{
+      sql=await effectiveLedgerSql(sql);
       const expenses=(await sql.query<Row>(`SELECT e.*,
         coalesce((SELECT sum(p.amount_minor) FROM hamdee_private.expense_payments p WHERE p.expense_id=e.id AND p.status='recorded' AND p.payment_date<=$2::date),0)::text AS paid_minor,
         coalesce((SELECT sum(p.amount_minor) FROM hamdee_private.expense_payments p WHERE p.expense_id=e.id AND p.status='pending' AND p.payment_date<=$2::date),0)::text AS pending_cheque_minor
@@ -70,6 +72,7 @@ export class ExpenseService {
     const action=String(b.action);check(Object.hasOwn(fields,action)&&Object.keys(b).every(k=>k==='action'||fields[action].includes(k)),'Unknown operation or fields.');
     const digest=createHash('sha256').update(canonical(b)).digest('hex');
     return this.properties.ownerContext(identity,async(sql,actorId)=>{
+      sql=await effectiveLedgerSql(sql);
       // Acquire in the same order as connected rent/finance commands.
       await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['hamdee-operations-money']);
       await sql.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['expense-command:'+actorId+':'+key]);

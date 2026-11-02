@@ -35,7 +35,7 @@ export function staffCommandForm(action,record={},choices={collectors:[],receipt
     body=field('name','Collector name',record.name||'','text',true,'maxlength="200"')+field('phone','Phone / contact (optional)',record.phone||'','tel',false,'maxlength="60"')+notes(record.notes||'')+'<p class="muted-help">A collector is a business record managed by the owner. This does not create a CRM account.</p>';
   }else if(action==='create-account'){
     title='Add company cash / bank account';hidden={scope:'company'};
-    body=field('name','Account name','','text',true,'maxlength="200"')+select('kind','Account type',[['cash','Company cash'],['bank','Company bank']])+'<input type="hidden" name="currency" value="QAR">'+
+    body=field('name','Account name','','text',true,'maxlength="200"')+select('kind','Account type',[['cash','Company cash'],['bank','Company bank']])+field('currency','Currency','','text',true,'pattern="[A-Z]{3}" maxlength="3"')+
       field('openingDate','Opening balance date','','date')+field('openingAmount','Owner-confirmed opening balance','','text',true,'inputmode="decimal" pattern="[0-9]{1,18}(\\.[0-9]{1,12})?"')+
       confirmation('ownerConfirmedOpening','I confirm this account’s opening amount and date, including an explicit zero if appropriate.')+notes('')+'<p class="muted-help">Enter the actual opening balance. No suggested balance or receipt income is created.</p>';
   }else if(action==='record-collection'){
@@ -149,8 +149,8 @@ async function saveCommand(state,form){
   }catch(cause){
     if(!alive(state)||controller.signal.aborted)return;
     if(cause.status===401||cause.code==='OWNER_ACCESS_DENIED'){await state.options.onAccessLoss(cause);return;}
-    state.pending.uncertain=Boolean(cause.uncertain);
-    form.querySelectorAll('input,select').forEach(input=>input.disabled=state.pending.uncertain);
+    state.pending.uncertain=state.pending.uncertain||Boolean(cause.uncertain);
+    if(state.pending.uncertain)form.querySelectorAll('input,select').forEach(input=>input.disabled=true);
     error.textContent=cause.message+(state.pending.uncertain?' The save may have reached the server. Save again to confirm the exact submission; closing will not undo a committed change.':'');
     if(cause.status===409||cause.status===412)error.textContent+=' Review the latest saved records before trying a changed submission.';
     if(cause.status===412&&state.action==='update-collector'){
@@ -238,6 +238,7 @@ export async function renderStaffCollections(target,options){
     if(accounts.status==='fulfilled'&&Array.isArray(accounts.value.data?.accounts))c.accounts=accounts.value.data.accounts.filter(row=>row.scope==='company');
     else{c.accounts=[];c.accountIssue=accounts.status==='rejected'?accounts.reason.message:'Unsupported company account format.';}
     draw(c);
+    if(active(c)){const extra=await import('./continuation.js');await extra.mountContinuation(target,{...c,asOf:period.asOf,month:period.month,collectorId:period.collectorId,collectors:c.data.collectors,reloadParent:()=>renderStaffCollections(target,c)},['collector']);}
   }catch(error){if(!active(c)||signal.aborted)return;if(error.status===401||error.code==='OWNER_ACCESS_DENIED')await c.onAccessLoss(error);else unavailable(target,error.message);}
   finally{if(active(c)&&!signal.aborted)target.setAttribute('aria-busy','false');if(readController===controller)readController=null;}
 }

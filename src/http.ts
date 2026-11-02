@@ -7,6 +7,10 @@ import { securityLogger,logSafely,type SecurityLogger } from './security-log';
 import { RentalService } from './rental';
 import { CustomerService } from './customers';
 import { ReconciliationService } from './reconciliation';
+import { FinancialCorrectionService } from './financial-corrections';
+import { PrincipalService } from './principal';
+import { SourceReportService } from './source-reports';
+import { SupportingRecordService } from './supporting-records';
 import { ExpenseService } from './expenses';
 import { PartnerService } from './partners';
 import { DailyDashboardService } from './daily-dashboard';
@@ -44,14 +48,31 @@ export function createHandler(provider:IdentityProvider,service:PropertyService,
       // Also validate enabled membership before parsing untrusted mutation fields.
       // For operational modules, the full owner portfolio grant is checked in
       // this same transaction; it is never inferred from a role name alone.
-      const session=await service.session(identity,Object.hasOwn(modules,moduleName)||moduleName==='partners'||moduleName==='operations-dashboard'||moduleName==='documents'||moduleName==='customers'||moduleName==='reconciliations');
+      const extraOwnerModules=['financial-corrections','principal','source-reports','supporting-records'];
+      const session=await service.session(identity,Object.hasOwn(modules,moduleName)||moduleName==='partners'||moduleName==='operations-dashboard'||moduleName==='documents'||moduleName==='customers'||moduleName==='reconciliations'||extraOwnerModules.includes(moduleName));
       requireThat(url.pathname===base||url.pathname.startsWith(base+'/'),404,'NOT_FOUND','Endpoint not found.');
       if(path==='/session'&&request.method==='GET') return json({data:{...session,authenticationProvider:provider.kind||'server-validated'}});
+      if(extraOwnerModules.includes(moduleName)){
+        const extra=moduleName==='financial-corrections'?new FinancialCorrectionService(service):moduleName==='principal'?new PrincipalService(service):moduleName==='source-reports'?new SourceReportService(service):new SupportingRecordService(service);
+        const readFields=moduleName==='financial-corrections'?['asOf','customerId']:moduleName==='principal'?['asOf','currency','customerId']:moduleName==='source-reports'?['month','asOf','propertyId']:['kind','propertyId','customerId','q'];
+        if(request.method==='GET'&&path==='/'+moduleName){
+          requireThat([...url.searchParams.keys()].every(k=>readFields.includes(k)&&url.searchParams.getAll(k).length===1),400,'INVALID_QUERY','Check the requested filters.');
+          const filters=Object.fromEntries(url.searchParams),asOf=filters.asOf??new Date().toISOString().slice(0,10);
+          const result=moduleName==='financial-corrections'?await (extra as FinancialCorrectionService).overview(identity,{...filters,asOf}):moduleName==='principal'?await (extra as PrincipalService).overview(identity,{...filters,asOf}):moduleName==='source-reports'?await (extra as SourceReportService).overview(identity,{...filters,month:filters.month??asOf.slice(0,7),asOf}):await (extra as SupportingRecordService).overview(identity,filters);
+          return json({data:result});
+        }
+        requireThat(moduleName!=='source-reports'&&request.method==='POST'&&path==='/'+moduleName+'/commands',405,'METHOD_NOT_ALLOWED','This method is unavailable.');
+        requireThat([...url.searchParams.keys()].length===0,400,'INVALID_QUERY','Commands do not accept query filters.');
+        requireThat(request.headers.get('origin')===url.origin,403,'ORIGIN_REJECTED','This request origin is not permitted.');
+        const key=request.headers.get('idempotency-key');requireThat(key&&uuid.test(key),400,'IDEMPOTENCY_KEY_REQUIRED','A valid operation key is required.');
+        const result=await (extra as FinancialCorrectionService|PrincipalService|SupportingRecordService).mutate(identity,await readJson(request),key,requestId);
+        return json(result,200,result.replay?{'Idempotent-Replay':'true'}:{});
+      }
       if(moduleName==='reconciliations'){
         const reconciliations=new ReconciliationService(service);
         if(request.method==='GET'&&path==='/reconciliations'){
-          requireThat([...url.searchParams.keys()].every(k=>['asOf','accountId'].includes(k)&&url.searchParams.getAll(k).length===1),400,'INVALID_QUERY','Check reconciliation filters.');
-          return json({data:await reconciliations.overview(identity,{asOf:url.searchParams.get('asOf')??new Date().toISOString().slice(0,10),accountId:url.searchParams.get('accountId')??undefined})});
+          requireThat([...url.searchParams.keys()].every(k=>['asOf','accountId','collectorId','currency'].includes(k)&&url.searchParams.getAll(k).length===1),400,'INVALID_QUERY','Check reconciliation filters.');
+          return json({data:await reconciliations.overview(identity,{asOf:url.searchParams.get('asOf')??new Date().toISOString().slice(0,10),accountId:url.searchParams.get('accountId')??undefined,collectorId:url.searchParams.get('collectorId')??undefined,currency:url.searchParams.get('currency')??undefined})});
         }
         requireThat(request.method==='POST'&&path==='/reconciliations/commands',405,'METHOD_NOT_ALLOWED','This method is unavailable.');
         requireThat([...url.searchParams.keys()].length===0,400,'INVALID_QUERY','Commands do not accept query filters.');

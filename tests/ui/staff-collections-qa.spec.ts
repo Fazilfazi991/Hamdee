@@ -12,7 +12,7 @@ let server: Awaited<ReturnType<typeof startOwnerBrowserHarness>>;
 test.setTimeout(180_000);
 test.beforeEach(async () => {
   const sql = await readFile(new URL('../../migrations/006_local_operations_records.up.sql', import.meta.url));
-  expect(createHash('sha256').update(sql).digest('hex')).toBe('d1236225e3f34dcae489d593419f9e6a2999208d45e23e112f2cb4f1e814b0e0');
+  expect(createHash('sha256').update(sql.toString('utf8').replace(/\r\n/g,'\n')).digest('hex')).toBe('d1236225e3f34dcae489d593419f9e6a2999208d45e23e112f2cb4f1e814b0e0');
   server = await startOwnerBrowserHarness({ migrationFiles: ['006_local_operations_records.up.sql'],
     operationsFactory: properties => ({ staffCollections: new StaffCollectionsService(properties), companyFinance: new CompanyFinanceService(properties) }) });
   await mkdir('evidence/staff-collections-qa/screenshots', { recursive: true });
@@ -31,6 +31,13 @@ async function navigate(page: Page) {
   if (await menu.isVisible()) await menu.click();
   await page.getByRole('link', { name: 'Staff Collections', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Collector register', exact: true })).toBeVisible();
+  await historicalPeriod(page);
+}
+async function historicalPeriod(page:Page){
+  await page.getByLabel('Statement month',{exact:true}).fill('2026-10');
+  await page.getByLabel('Balance cutoff',{exact:true}).fill('2026-10-16');
+  await page.getByRole('button',{name:'Apply staff filters',exact:true}).click();
+  await expect(page.locator('#operations-workspace')).toHaveAttribute('aria-busy','false');
 }
 async function open(page: Page, name: string) {
   await page.getByRole('button', { name, exact: true }).click();
@@ -69,7 +76,7 @@ test('Staff independent owner UI: property receipt, partial/full handovers, dupl
   dialog = await open(page, 'Add company account');
   await dialog.getByLabel('Account name', { exact: true }).fill('Synthetic independent company cash');
   await dialog.getByLabel('Account type', { exact: true }).selectOption('cash');
-  await expect(dialog.locator('input[name="currency"]')).toHaveValue('QAR');
+  await dialog.getByLabel('Currency',{exact:true}).fill('QAR');
   await dialog.getByLabel('Opening balance date', { exact: true }).fill('2026-10-01');
   await dialog.getByLabel('Owner-confirmed opening balance', { exact: true }).fill('0');
   await dialog.getByLabel('I confirm this account’s opening amount and date, including an explicit zero if appropriate.', { exact: true }).check(); await save(dialog);
@@ -122,7 +129,7 @@ test('Staff independent owner UI: property receipt, partial/full handovers, dupl
   assertMajor(company.totals[0].balance, '100'); assertMajor(company.totals[0].receipts, '0'); assertMajor(company.totals[0].transfersIn, '100');
   expect(snapshot.collections).toHaveLength(1); expect(snapshot.handovers).toHaveLength(3);
   await expect(page.getByRole('region', { name: 'Daily collector statement', exact: true })).toContainText('2026-10-16');
-  await page.reload(); await expect(page.getByRole('region', { name: 'Collector handovers', exact: true })).toContainText('SYNTHETIC-UI-H2-FULL');
+  await page.reload();await expect(page.getByRole('region',{name:'Collector register',exact:true})).toBeVisible();await historicalPeriod(page); await expect(page.getByRole('region', { name: 'Collector handovers', exact: true })).toContainText('SYNTHETIC-UI-H2-FULL');
   const persisted = await state(page); expect(persisted.handovers).toHaveLength(3); assertMajor(persisted.totals[0].balance, '0');
   const rental = await page.request.get(server.url + '/api/hamdee/v1/rental?month=2026-10&asOf=2026-10-16');
   expect(rental.status()).toBe(200); const rentalData = (await rental.json()).data;

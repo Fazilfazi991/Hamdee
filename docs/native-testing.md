@@ -23,6 +23,20 @@ pnpm run test:native:portable --suite=legacy --approved-local-only
 pnpm run test:native:portable --suite=owner --approved-local-only
 ```
 
+The continuation also provides one complete, fail-fast native command. It runs
+the legacy, owner, car/finance and populated continuation-upgrade suites in
+separate fresh clusters, including actual database/application restarts:
+
+```text
+node --import tsx scripts/run-native-all.mjs --approved-local-only
+```
+
+Append `--runtime-root="path/to/reviewed-tools"` to use the same pinned external
+cache for every suite. The runtime override exists only in test code, never in
+the deployed application. Logs and generated synthetic databases stay in the
+ignored evidence/test directories. Missing runtimes or system execution denial
+are failures to resolve or report, not skipped acceptance.
+
 For a reviewed external tool cache, append `--runtime-root="path/to/reviewed-tools"`. The launcher reads tools there but writes cluster/password/log/witness files only under this clone's ignored `.test-data/`. It creates a fresh random loopback port and database, uses transient synthetic credentials, verifies PID/data-directory ownership before restart/stop, and stops its own cluster in cleanup. It does not register a Windows service, modify machine settings or discover existing databases.
 
 The owner suite also starts `tests/support/owner-app-child.mjs` with constructor-injected synthetic auth and verifies application/database restart persistence. This child is test source, not an application entrypoint or an environment-selectable fake mode. Private IPC/witness credentials are never committed; the witness is consumed/unlinked.

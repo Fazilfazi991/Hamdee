@@ -10,8 +10,8 @@ import { CompanyFinanceService } from '../../src/company-finance';
 // Run only after the Coordinator-reviewed navigation delta is frozen and bound.
 let server: Awaited<ReturnType<typeof startOwnerBrowserHarness>> | undefined;
 const api = '/api/hamdee/v1', coreNames = ['Dashboard', 'Villas & Properties', 'Expenses', 'Reports'];
-const sidebarOrder = ['Dashboard', 'Villas & Properties', 'Car Rentals', 'Staff Collections', 'Expenses', 'Company Finance', 'Personal Finance', 'Partners & Investments', 'Reports'];
-const unfinishedNames = ['Car Rentals', 'Company Finance', 'Personal Finance', 'Partners & Investments'];
+const sidebarOrder = ['Dashboard', 'Customers & Tenants', 'Villas & Properties', 'Car Rentals', 'Staff Collections', 'Expenses', 'Company Finance', 'Personal Finance', 'Partners & Investments', 'Reports'];
+const unfinishedNames = ['Customers & Tenants', 'Car Rentals', 'Company Finance', 'Personal Finance', 'Partners & Investments'];
 test.setTimeout(120_000);
 test.beforeEach(async () => { await mkdir('evidence/navigation-qa/screenshots', { recursive: true }); });
 test.afterEach(async () => { await server?.close(); server = undefined; });
@@ -42,7 +42,7 @@ async function noDeadSidebar(page: Page, staff: boolean) {
   const labels = (await navigation.getByRole('link').allTextContents()).map(label => label.trim());
   expect(labels.sort()).toEqual((staff ? [...coreNames, 'Staff Collections'] : [...coreNames]).sort());
   const entries = navigation.locator('a, button, [aria-disabled="true"]');
-  await expect(entries).toHaveCount(9);
+  await expect(entries).toHaveCount(10);
   expect((await entries.allTextContents()).map(text => text.trim().replace(/\s*(Unavailable|Checking…|Retry)\s*$/i, '').trim())).toEqual(sidebarOrder);
   for (const name of [...unfinishedNames, ...(staff ? [] : ['Staff Collections'])]) {
     await expect(navigation.getByRole('link', { name, exact: true })).toHaveCount(0);
@@ -127,9 +127,10 @@ async function section(page: Page, name: RegExp, propertyId: string) {
   await expect(link).toHaveCount(1);
   const href = await link.getAttribute('href'); expect(href).toContain(propertyId); await link.click();
   await expect(page).toHaveURL(server!.url + '/workspace/index.html' + href);
-  await expect(page.locator('#detail-content').getByRole('link', { name })).toHaveAttribute('aria-current', 'page');
+  await expect(link).toHaveAttribute('aria-current', 'page');
   await historicalFilters(page);
-  await expect(page.locator('#detail-content').getByRole('link', { name })).toHaveAttribute('aria-current', 'page'); return href!;
+  await expect(page.locator('#detail-content').getByRole('link', { name })).toHaveAttribute('aria-current', 'page');
+  return href!;
 }
 function gate() {
   let release!: () => void, entered!: () => void, delivered!: () => void;
